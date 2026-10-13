@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+
+    <Title>ApeFree.DonateScreen.WinDesktop</Title>
+    <Product>ApeFree.DonateScreen.WinDesktop</Product>
+    <Version>0.1.0.0</Version>
+    <Authors>Guijie Lee</Authors>
+    <Company>ApeFree</Company>
+    <Copyright>Copyright © 2022-2026 ApeFree, All Rights Reserved.</Copyright>
+    <Description>ApeFree.DonateScreen 远程综合桌面程序 (支持受控分享与主控端多设备管理/远程交互)</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ApeFree.DonateScreen\ApeFree.DonateScreen.csproj" />
+    <ProjectReference Include="..\ApeFree.DonateScreen.WinSlaveDesktop\ApeFree.DonateScreen.WinSlaveDesktop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="ApeFree.ApeRpc.BytesIO" Version="0.0.3-alpha61009" />
+    <PackageReference Include="TurboJpegWrapper" Version="1.5.2" />
+  </ItemGroup>
+
+</Project>
