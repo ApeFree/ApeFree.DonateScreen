@@ -88,10 +88,10 @@ namespace ApeFree.DonateScreen.Master
 
             var session = new SlaveSession(sessionId, client, remoteAddress);
 
-            // 延迟一点等待 Slave 服务注册就绪后获取透明代理
+            // 异步等待对端服务注册完成并获取透明 RPC 代理
             Task.Run(async () =>
             {
-                await Task.Delay(300);
+                await Task.Delay(200);
 
                 try
                 {
@@ -113,7 +113,7 @@ namespace ApeFree.DonateScreen.Master
                             }
                             catch (Exception ex)
                             {
-                                Console.WriteLine($"[Master Error in GetRegistrationInfo] {ex}");
+                                Console.WriteLine($"[Master Warning] GetRegistrationInfo: {ex.Message}");
                             }
                         }
 
@@ -138,9 +138,9 @@ namespace ApeFree.DonateScreen.Master
                         _sessionManager.AddOrUpdate(session);
                     }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // 若初次获取异常，仍将基础会话添加，等待 Slave 上报注册信息
+                    Console.WriteLine($"[Master Error] QueryService failed: {ex.Message}");
                     _sessionManager.AddOrUpdate(session);
                 }
             });
@@ -199,29 +199,46 @@ namespace ApeFree.DonateScreen.Master
                     _tcpServer = null;
                 }
 
-                _sessionManager.Clear();
-
                 if (_masterService != null)
                 {
                     _masterService.SlaveRegistered -= OnSlaveReportedRegistration;
                     _masterService = null;
                 }
 
-                _addon?.Dispose();
+                _sessionManager.Clear();
+
+                try
+                {
+                    _addon?.Dispose();
+                }
+                catch { }
                 _addon = null;
                 _terminal = null;
             }
 
             if (serverToClose != null)
             {
-                await serverToClose.CloseAsync();
-                serverToClose.Dispose();
+                try
+                {
+                    using var cts = new System.Threading.CancellationTokenSource(2000);
+                    var closeTask = serverToClose.CloseAsync();
+                    await Task.WhenAny(closeTask, Task.Delay(2000, cts.Token)).ConfigureAwait(false);
+                }
+                catch { }
+                finally
+                {
+                    try
+                    {
+                        serverToClose.Dispose();
+                    }
+                    catch { }
+                }
             }
         }
 
         public void Stop()
         {
-            StopAsync().GetAwaiter().GetResult();
+            Task.Run(async () => await StopAsync()).GetAwaiter().GetResult();
         }
 
         public void Dispose()

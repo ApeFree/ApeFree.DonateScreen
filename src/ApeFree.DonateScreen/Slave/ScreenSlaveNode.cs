@@ -119,9 +119,6 @@ namespace ApeFree.DonateScreen.Slave
                 // 7. 启动屏幕抓取推流循环
                 _screenService.Start();
 
-                // 8. 向上线登记 Master 节点
-                await NotifyMasterOnlineAsync();
-
                 ConnectionStatusChanged?.Invoke(this, true);
                 return true;
             }
@@ -136,8 +133,8 @@ namespace ApeFree.DonateScreen.Slave
         {
             try
             {
-                if (_terminal == null) return;
-                var masterService = _terminal.GetService<IMasterScreenService>(nameof(MasterScreenService));
+                if (_addon == null || _tcpClient == null || !_tcpClient.IsConnected) return;
+                var masterService = _addon.QueryService<IMasterScreenService>(nameof(MasterScreenService), _tcpClient);
                 if (masterService != null)
                 {
                     var topo = _screenService?.ScreenTopology;
