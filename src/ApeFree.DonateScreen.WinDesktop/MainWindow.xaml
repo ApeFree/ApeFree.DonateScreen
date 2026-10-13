@@ -12,6 +12,10 @@
         <vm:MasterViewModel x:Name="ViewModel" />
     </Window.DataContext>
 
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisConverter"/>
+    </Window.Resources>
+
     <Grid>
         <TabControl Background="Transparent" BorderThickness="0">
             <!-- 标签页 1：远程主控端 (Master) -->
@@ -60,7 +64,8 @@
                     <!-- Slave 设备接入列表 -->
                     <Grid Grid.Row="1">
                         <!-- 列表区域 -->
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Visibility="{Binding HasSlaveDevices, Converter={StaticResource BoolToVisConverter}}">
                             <ItemsControl ItemsSource="{Binding SlaveDevices}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
@@ -114,21 +119,11 @@
 
                         <!-- 空状态提示 -->
                         <Border Background="White" CornerRadius="8" BorderBrush="#E0E0E0" BorderThickness="1"
-                                Visibility="{Binding SlaveDevices.Count, Converter={x:Null}}">
+                                Visibility="{Binding HasNoSlaveDevices, Converter={StaticResource BoolToVisConverter}}">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="32">
                                 <TextBlock Text="暂无 Slave 设备接入" FontSize="16" FontWeight="SemiBold" Foreground="#888888" HorizontalAlignment="Center" Margin="0,0,0,8"/>
                                 <TextBlock Text="请在受控端 (WinSlaveDesktop) 输入本机的 IP 与监听端口，并点击【开始分享】即可在此显示" FontSize="12" Foreground="#AAAAAA" HorizontalAlignment="Center"/>
                             </StackPanel>
-                            <Border.Style>
-                                <Style TargetType="Border">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SlaveDevices.Count}" Value="0">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Border.Style>
                         </Border>
                     </Grid>
                 </Grid>

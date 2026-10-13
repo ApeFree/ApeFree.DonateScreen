@@ -48,11 +48,21 @@ namespace ApeFree.DonateScreen.WinDesktop.ViewModels
         /// </summary>
         public ObservableCollection<SlaveSession> SlaveDevices { get; } = new();
 
+        /// <summary>
+        /// 是否有已接入的 Slave 设备
+        /// </summary>
+        public bool HasSlaveDevices => SlaveDevices.Count > 0;
+
+        /// <summary>
+        /// 是否无任何 Slave 设备接入
+        /// </summary>
+        public bool HasNoSlaveDevices => SlaveDevices.Count == 0;
+
         public async Task ToggleListenAsync()
         {
             if (IsListening)
             {
-                Stop();
+                await StopAsync();
             }
             else
             {
@@ -73,35 +83,38 @@ namespace ApeFree.DonateScreen.WinDesktop.ViewModels
 
             _masterNode = new ScreenMasterNode(options);
 
-            // 监听 Slave 设备动态变动
+            // 监听 Slave 设备动态变动 (采用非阻塞 InvokeAsync，彻底避免主从跨线程死锁)
             _masterNode.SessionManager.SlaveConnected += (s, session) =>
             {
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
                     if (!SlaveDevices.Contains(session))
                     {
                         SlaveDevices.Add(session);
+                        NotifyDevicesStateChanged();
                     }
                 });
             };
 
             _masterNode.SessionManager.SlaveDisconnected += (s, session) =>
             {
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
                     SlaveDevices.Remove(session);
+                    NotifyDevicesStateChanged();
                 });
             };
 
             _masterNode.SessionManager.SlaveUpdated += (s, session) =>
             {
-                Application.Current?.Dispatcher.Invoke(() =>
+                Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
                     int index = SlaveDevices.IndexOf(session);
                     if (index >= 0)
                     {
                         SlaveDevices[index] = session;
                     }
+                    NotifyDevicesStateChanged();
                 });
             };
 
@@ -112,14 +125,30 @@ namespace ApeFree.DonateScreen.WinDesktop.ViewModels
                 : "启动监听失败，请检查端口是否被占用";
         }
 
-        public void Stop()
+        public async Task StopAsync()
         {
-            _masterNode?.Stop();
-            _masterNode?.Dispose();
-            _masterNode = null;
+            StatusText = "正在停止监听服务...";
+            if (_masterNode != null)
+            {
+                await _masterNode.StopAsync();
+                _masterNode.Dispose();
+                _masterNode = null;
+            }
             IsListening = false;
             SlaveDevices.Clear();
+            NotifyDevicesStateChanged();
             StatusText = "监听服务已停止";
+        }
+
+        public void Stop()
+        {
+            Task.Run(async () => await StopAsync()).GetAwaiter().GetResult();
+        }
+
+        private void NotifyDevicesStateChanged()
+        {
+            OnPropertyChanged(nameof(HasSlaveDevices));
+            OnPropertyChanged(nameof(HasNoSlaveDevices));
         }
 
         /// <summary>
