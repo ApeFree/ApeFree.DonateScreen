@@ -143,7 +143,7 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
         {
             if (IsConnected)
             {
-                Stop();
+                await StopAsync();
             }
             else
             {
@@ -172,7 +172,7 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             _slaveNode = new ScreenSlaveNode(options);
             _slaveNode.ConnectionStatusChanged += (s, connected) =>
             {
-                System.Windows.Application.Current?.Dispatcher.Invoke(() =>
+                System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
                     IsConnected = connected;
                     StatusText = connected ? "已连接受控中" : "已断开连接 (重连中...)";
@@ -192,15 +192,27 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             }
         }
 
-        public void Stop()
+        public async Task StopAsync()
         {
-            _slaveNode?.Stop();
-            _slaveNode?.Dispose();
-            _slaveNode = null;
+            StatusText = "正在断开分享...";
+            if (_slaveNode != null)
+            {
+                await Task.Run(() =>
+                {
+                    _slaveNode.Stop();
+                    _slaveNode.Dispose();
+                }).ConfigureAwait(false);
+                _slaveNode = null;
+            }
             IsConnected = false;
             StatusText = "已断开分享";
             CurrentFps = 0;
             CurrentBitrate = "0 KB/s";
+        }
+
+        public void Stop()
+        {
+            Task.Run(async () => await StopAsync()).GetAwaiter().GetResult();
         }
 
         public void EmergencyCutoff()
