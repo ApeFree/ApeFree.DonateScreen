@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ApeFree.DonateScreen/ApeFree.DonateScreen.csproj" />
+    <Project Path="src/ApeFree.DonateScreen.WinSlaveDesktop/ApeFree.DonateScreen.WinSlaveDesktop.csproj" />
+    <Project Path="src/ApeFree.DonateScreen.WinDesktop/ApeFree.DonateScreen.WinDesktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ApeFree.DonateScreen.Tests/ApeFree.DonateScreen.Tests.csproj" />
+  </Folder>
+</Solution>
