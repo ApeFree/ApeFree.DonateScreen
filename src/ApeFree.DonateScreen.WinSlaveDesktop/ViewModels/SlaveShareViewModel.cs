@@ -92,6 +92,29 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             }
         }
 
+        private PixelFormatMode _selectedPixelFormat = PixelFormatMode.Rgb24;
+
+        public PixelFormatMode SelectedPixelFormat
+        {
+            get => _selectedPixelFormat;
+            set
+            {
+                _selectedPixelFormat = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SelectedPixelFormatIndex));
+                UpdateOptions();
+            }
+        }
+
+        public int SelectedPixelFormatIndex
+        {
+            get => (int)_selectedPixelFormat;
+            set
+            {
+                SelectedPixelFormat = (PixelFormatMode)Math.Clamp(value, 0, 2);
+            }
+        }
+
         public bool IsConnected
         {
             get => _isConnected;
@@ -164,7 +187,8 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 CaptureOptions = new CaptureOptionsDto
                 {
                     MaxFps = MaxFps,
-                    JpegQuality = JpegQuality
+                    JpegQuality = JpegQuality,
+                    PixelFormat = SelectedPixelFormat
                 },
                 AutoReconnect = true
             };
@@ -238,7 +262,8 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 _slaveNode.ScreenService.UpdateCaptureOptions(new CaptureOptionsDto
                 {
                     MaxFps = MaxFps,
-                    JpegQuality = JpegQuality
+                    JpegQuality = JpegQuality,
+                    PixelFormat = SelectedPixelFormat
                 });
             }
         }

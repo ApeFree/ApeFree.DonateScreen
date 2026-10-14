@@ -18,6 +18,9 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
         private int _fpsCounter = 0;
         private long _bytesCounter = 0;
         private DateTime _lastStatsTime = DateTime.UtcNow;
+        private const int TargetQuota = 10;
+        private const int RefillThreshold = 6;
+        private int _framesReceivedSinceRefill = 0;
         private bool _isFullscreen = false;
 
         public RemoteViewerWindow(SlaveSession session)
@@ -62,8 +65,11 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
             _statsTimer.Tick += (s, e) => UpdateStats();
             _statsTimer.Start();
 
-            // 主动请求一次关键帧
-            _session.ScreenService?.RequestKeyFrame();
+            // 主动设置流控刷新配额并触发画面推流
+            Task.Run(() =>
+            {
+                try { _session.ScreenService?.SetRefreshQuota(TargetQuota); } catch { }
+            });
         }
 
         private void OnFrameReceived(object? sender, ScreenFramePacketDto e)
@@ -76,6 +82,21 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
                 foreach (var b in e.Blocks)
                 {
                     _bytesCounter += b.CompressedData?.Length ?? 0;
+                }
+
+                // 基于信用额度(Credit)的单调平滑流控机制：
+                // 收到达到阈值帧数时，如果窗口未最小化，主动异步通知受控端重置配额为 10
+                _framesReceivedSinceRefill++;
+                if (_framesReceivedSinceRefill >= RefillThreshold)
+                {
+                    _framesReceivedSinceRefill = 0;
+                    if (WindowState != WindowState.Minimized)
+                    {
+                        Task.Run(() =>
+                        {
+                            try { _session.ScreenService?.SetRefreshQuota(TargetQuota); } catch { }
+                        });
+                    }
                 }
             }, DispatcherPriority.Render);
         }
@@ -285,6 +306,31 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
         }
 
         #endregion
+
+        protected override void OnStateChanged(EventArgs e)
+        {
+            base.OnStateChanged(e);
+            if (WindowState != WindowState.Minimized)
+            {
+                _framesReceivedSinceRefill = 0;
+                Task.Run(() =>
+                {
+                    try { _session.ScreenService?.SetRefreshQuota(TargetQuota); } catch { }
+                });
+            }
+        }
+
+        protected override void OnActivated(EventArgs e)
+        {
+            base.OnActivated(e);
+            if (WindowState != WindowState.Minimized)
+            {
+                Task.Run(() =>
+                {
+                    try { _session.ScreenService?.SetRefreshQuota(TargetQuota); } catch { }
+                });
+            }
+        }
 
         protected override void OnClosed(EventArgs e)
         {

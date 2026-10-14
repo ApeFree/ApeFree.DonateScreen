@@ -91,7 +91,16 @@
                         <TextBlock Text="TurboJPEG 压缩质量" FontSize="12" Foreground="#555555"/>
                         <TextBlock Grid.Column="1" Text="{Binding JpegQuality, StringFormat='{}{0}%'}" FontSize="12" FontWeight="SemiBold" Foreground="#0078D4"/>
                     </Grid>
-                    <Slider Minimum="20" Maximum="95" Value="{Binding JpegQuality}" SmallChange="5" LargeChange="10" Margin="0,0,0,4"/>
+                    <Slider Minimum="20" Maximum="95" Value="{Binding JpegQuality}" SmallChange="5" LargeChange="10" Margin="0,0,0,8"/>
+
+                    <Grid Margin="0,0,0,4">
+                        <TextBlock Text="色彩深度与图像质量" FontSize="12" Foreground="#555555"/>
+                    </Grid>
+                    <ComboBox SelectedIndex="{Binding SelectedPixelFormatIndex}" Height="28" Margin="0,0,0,4">
+                        <ComboBoxItem Content="RGB 24位真彩 (默认，无Alpha通道，推荐)"/>
+                        <ComboBoxItem Content="RGB 16位高彩 (RGB565，极速低功耗省50%)"/>
+                        <ComboBoxItem Content="BGRA 32位全彩 (含Alpha通道)"/>
+                    </ComboBox>
                 </StackPanel>
             </Border>
 
