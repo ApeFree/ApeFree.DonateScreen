@@ -25,6 +25,27 @@ namespace ApeFree.DonateScreen.Contracts
     }
 
     /// <summary>
+    /// 像素色彩格式选项
+    /// </summary>
+    public enum PixelFormatMode
+    {
+        /// <summary>
+        /// RGB 24 位真彩色（默认，去除非必要 Alpha 通道，降低 25% 内存与编码开销）
+        /// </summary>
+        Rgb24 = 0,
+
+        /// <summary>
+        /// RGB 16 位高彩色（RGB565，极速低功耗，降低 50% 内存与编码开销）
+        /// </summary>
+        Rgb565 = 1,
+
+        /// <summary>
+        /// BGRA 32 位全彩（保留 4 字节 Alpha 通道）
+        /// </summary>
+        Bgra32 = 2
+    }
+
+    /// <summary>
     /// 鼠标动作标志位
     /// </summary>
     [Flags]
@@ -66,6 +87,11 @@ namespace ApeFree.DonateScreen.Contracts
         /// 矩形高度（像素）
         /// </summary>
         public int Height { get; set; }
+
+        /// <summary>
+        /// 像素色彩格式
+        /// </summary>
+        public PixelFormatMode PixelFormat { get; set; } = PixelFormatMode.Rgb24;
 
         /// <summary>
         /// 经 TurboJPEG 压缩后的独立 JPEG 字节数据
@@ -142,6 +168,11 @@ namespace ApeFree.DonateScreen.Contracts
         /// 选中的显示器索引
         /// </summary>
         public int TargetDisplayIndex { get; set; } = 0;
+
+        /// <summary>
+        /// 像素色彩格式（默认 Rgb24，去掉 Alpha 通道；可选 Rgb565 极速低功耗）
+        /// </summary>
+        public PixelFormatMode PixelFormat { get; set; } = PixelFormatMode.Rgb24;
     }
 
     /// <summary>

@@ -20,9 +20,14 @@ namespace ApeFree.DonateScreen.Capture
         private static extern int GetSystemMetrics(int nIndex);
 
         private bool _forceKeyFrame = true;
+        private byte[]? _currentBuffer;
         private byte[]? _previousBuffer;
+        private Bitmap? _persistentBitmap;
+        private Graphics? _persistentGraphics;
         private readonly int _displayIndex;
         private int _virtualCounter = 0;
+        private int _allocatedWidth = 0;
+        private int _allocatedHeight = 0;
 
         public string EngineName => "GDI Desktop (Win32)";
 
@@ -61,31 +66,44 @@ namespace ApeFree.DonateScreen.Capture
             if (height <= 0) height = 1080;
 
             stride = width * 4;
+            int totalBytes = stride * height;
             dirtyRects = new List<Rectangle>();
             isKeyFrame = false;
 
-            bgraBuffer = new byte[stride * height];
+            // 内存复用：仅在首次或分辨率变动时重新分配缓冲区与 GDI 对象，彻底杜绝每帧 LOH 堆内存分配
+            if (_currentBuffer == null || _currentBuffer.Length != totalBytes || _allocatedWidth != width || _allocatedHeight != height)
+            {
+                _allocatedWidth = width;
+                _allocatedHeight = height;
+                _currentBuffer = new byte[totalBytes];
+                _previousBuffer = new byte[totalBytes];
+
+                _persistentGraphics?.Dispose();
+                _persistentBitmap?.Dispose();
+
+                _persistentBitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+                _persistentGraphics = Graphics.FromImage(_persistentBitmap);
+                _forceKeyFrame = true;
+            }
+
+            bgraBuffer = _currentBuffer;
 
             bool captureSuccess = false;
             try
             {
-                using (var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb))
+                if (_persistentGraphics != null && _persistentBitmap != null)
                 {
-                    using (var g = Graphics.FromImage(bmp))
-                    {
-                        g.CopyFromScreen(0, 0, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
-                    }
-
-                    var bmpData = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-                    Marshal.Copy(bmpData.Scan0, bgraBuffer, 0, bgraBuffer.Length);
-                    bmp.UnlockBits(bmpData);
+                    _persistentGraphics.CopyFromScreen(0, 0, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+                    var bmpData = _persistentBitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+                    Marshal.Copy(bmpData.Scan0, _currentBuffer, 0, totalBytes);
+                    _persistentBitmap.UnlockBits(bmpData);
                     captureSuccess = true;
                 }
             }
             catch (Exception ex) when (ex is Win32Exception || ex is InvalidOperationException)
             {
                 // 在无物理交互桌面或 CI 自动化测试服务进程中，生成动态仿真帧
-                GenerateVirtualFrame(bgraBuffer, width, height, stride);
+                GenerateVirtualFrame(_currentBuffer, width, height, stride);
                 captureSuccess = true;
             }
 
@@ -94,43 +112,60 @@ namespace ApeFree.DonateScreen.Capture
                 return false;
             }
 
-            if (_forceKeyFrame || _previousBuffer == null || _previousBuffer.Length != bgraBuffer.Length)
+            if (_forceKeyFrame || _previousBuffer == null)
             {
                 _forceKeyFrame = false;
                 isKeyFrame = true;
                 dirtyRects.Add(new Rectangle(0, 0, width, height));
-                _previousBuffer = (byte[])bgraBuffer.Clone();
+                Buffer.BlockCopy(_currentBuffer, 0, _previousBuffer!, 0, totalBytes);
                 return true;
             }
 
-            // 简单分块比对检测变化矩形（将屏幕水平分为 8 个切片进行快速差异检测）
-            int sliceHeight = height / 8;
-            for (int s = 0; s < 8; s++)
+            // 细分网格差量检测（4x4 = 16 块），大幅减少局部重绘时的冗余像素传输
+            int cols = 4;
+            int rows = 4;
+            int cellW = width / cols;
+            int cellH = height / rows;
+
+            for (int r = 0; r < rows; r++)
             {
-                int startY = s * sliceHeight;
-                int actualH = (s == 7) ? (height - startY) : sliceHeight;
-                int startByte = startY * stride;
-                int count = actualH * stride;
+                int y = r * cellH;
+                int curH = (r == rows - 1) ? (height - y) : cellH;
 
-                bool changed = false;
-                for (int b = 0; b < count; b += 32)
+                for (int c = 0; c < cols; c++)
                 {
-                    if (bgraBuffer[startByte + b] != _previousBuffer[startByte + b])
+                    int x = c * cellW;
+                    int curW = (c == cols - 1) ? (width - x) : cellW;
+
+                    // 快速抽样对比当前切块是否发生变动
+                    bool cellChanged = false;
+                    for (int row = 0; row < curH; row += 2)
                     {
-                        changed = true;
-                        break;
-                    }
-                }
+                        int rowOffset = (y + row) * stride + (x * 4);
+                        int rowBytes = curW * 4;
 
-                if (changed)
-                {
-                    dirtyRects.Add(new Rectangle(0, startY, width, actualH));
+                        for (int colByte = 0; colByte < rowBytes; colByte += 32)
+                        {
+                            if (_currentBuffer[rowOffset + colByte] != _previousBuffer[rowOffset + colByte])
+                            {
+                                cellChanged = true;
+                                break;
+                            }
+                        }
+
+                        if (cellChanged) break;
+                    }
+
+                    if (cellChanged)
+                    {
+                        dirtyRects.Add(new Rectangle(x, y, curW, curH));
+                    }
                 }
             }
 
             if (dirtyRects.Count > 0)
             {
-                _previousBuffer = (byte[])bgraBuffer.Clone();
+                Buffer.BlockCopy(_currentBuffer, 0, _previousBuffer, 0, totalBytes);
                 return true;
             }
 
@@ -158,6 +193,11 @@ namespace ApeFree.DonateScreen.Capture
         public void Dispose()
         {
             _previousBuffer = null;
+            _currentBuffer = null;
+            _persistentGraphics?.Dispose();
+            _persistentGraphics = null;
+            _persistentBitmap?.Dispose();
+            _persistentBitmap = null;
         }
     }
 }

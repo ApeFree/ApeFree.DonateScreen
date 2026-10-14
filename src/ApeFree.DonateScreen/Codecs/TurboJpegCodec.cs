@@ -1,3 +1,4 @@
+using ApeFree.DonateScreen.Contracts;
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -16,12 +17,41 @@ namespace ApeFree.DonateScreen.Codecs
 
         private static bool _useTurboJpeg = false;
 
+        [ThreadStatic]
+        private static TJCompressor? t_compressor;
+
+        [ThreadStatic]
+        private static TJDecompressor? t_decompressor;
+
         static TurboJpegCodec()
         {
             try
             {
-                // 预先探测系统/运行目录下是否存在可加载的 turbojpeg.dll
-                var hModule = LoadLibrary("turbojpeg.dll");
+                // 探测加载 turbojpeg.dll（按 x64/x86 架构路径优先定位）
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string archDir = Environment.Is64BitProcess ? "x64" : "x86";
+                string archDllPath = Path.Combine(baseDir, archDir, "turbojpeg.dll");
+
+                IntPtr hModule = IntPtr.Zero;
+                if (File.Exists(archDllPath))
+                {
+                    hModule = LoadLibrary(archDllPath);
+                }
+
+                if (hModule == IntPtr.Zero)
+                {
+                    string rootDllPath = Path.Combine(baseDir, "turbojpeg.dll");
+                    if (File.Exists(rootDllPath))
+                    {
+                        hModule = LoadLibrary(rootDllPath);
+                    }
+                }
+
+                if (hModule == IntPtr.Zero)
+                {
+                    hModule = LoadLibrary("turbojpeg.dll");
+                }
+
                 if (hModule != IntPtr.Zero)
                 {
                     _useTurboJpeg = true;
@@ -42,32 +72,47 @@ namespace ApeFree.DonateScreen.Codecs
             set => _useTurboJpeg = value;
         }
 
-        /// <summary>
-        /// 压缩 BGRA32 字节数组为 JPEG 字节数组
-        /// </summary>
-        public static byte[] CompressBgra(byte[] bgraData, int width, int height, int stride = 0, int quality = 75)
+        private static TJCompressor GetCompressor()
         {
-            if (width <= 0 || height <= 0 || bgraData == null || bgraData.Length == 0)
+            return t_compressor ??= new TJCompressor();
+        }
+
+        private static TJDecompressor GetDecompressor()
+        {
+            return t_decompressor ??= new TJDecompressor();
+        }
+
+        /// <summary>
+        /// 压缩指定格式像素数据为 JPEG
+        /// </summary>
+        public static byte[] Compress(byte[] pixelData, int width, int height, int stride = 0, PixelFormatMode formatMode = PixelFormatMode.Rgb24, int quality = 75)
+        {
+            if (width <= 0 || height <= 0 || pixelData == null || pixelData.Length == 0)
             {
                 return Array.Empty<byte>();
             }
 
+            int bytesPerPixel = (formatMode == PixelFormatMode.Bgra32) ? 4 : 3;
             if (stride <= 0)
             {
-                stride = width * 4;
+                stride = width * bytesPerPixel;
             }
 
             if (_useTurboJpeg)
             {
                 try
                 {
-                    using var compressor = new TJCompressor();
+                    var tjFormat = (formatMode == PixelFormatMode.Bgra32)
+                        ? TJPixelFormats.TJPF_BGRA
+                        : TJPixelFormats.TJPF_BGR;
+
+                    var compressor = GetCompressor();
                     return compressor.Compress(
-                        bgraData,
-                        width,
+                        pixelData,
                         stride,
+                        width,
                         height,
-                        TJPixelFormats.TJPF_BGRA,
+                        tjFormat,
                         TJSubsamplingOptions.TJSAMP_420,
                         quality,
                         TJFlags.NONE
@@ -79,11 +124,19 @@ namespace ApeFree.DonateScreen.Codecs
                 }
             }
 
-            return FallbackCompress(bgraData, width, height, stride, quality);
+            return FallbackCompress(pixelData, width, height, stride, formatMode, quality);
         }
 
         /// <summary>
-        /// 从内存指针压缩 BGRA32 图像数据（零拷贝）
+        /// 压缩 BGRA32 字节数组为 JPEG 字节数组
+        /// </summary>
+        public static byte[] CompressBgra(byte[] bgraData, int width, int height, int stride = 0, int quality = 75)
+        {
+            return Compress(bgraData, width, height, stride, PixelFormatMode.Bgra32, quality);
+        }
+
+        /// <summary>
+        /// 从内存指针压缩 BGRA32 图像数据
         /// </summary>
         public static unsafe byte[] CompressBgra(IntPtr pBgra, int width, int height, int stride = 0, int quality = 75)
         {
@@ -122,7 +175,7 @@ namespace ApeFree.DonateScreen.Codecs
             {
                 try
                 {
-                    using var decompressor = new TJDecompressor();
+                    var decompressor = GetDecompressor();
                     byte[] decompressed = decompressor.Decompress(
                         jpegData,
                         TJPixelFormats.TJPF_BGRA,
@@ -145,16 +198,20 @@ namespace ApeFree.DonateScreen.Codecs
         /// <summary>
         /// 托管降级压缩实现
         /// </summary>
-        private static byte[] FallbackCompress(byte[] bgraData, int width, int height, int stride, int quality)
+        private static byte[] FallbackCompress(byte[] pixelData, int width, int height, int stride, PixelFormatMode formatMode, int quality)
         {
+            var pixelFormat = (formatMode == PixelFormatMode.Bgra32)
+                ? System.Windows.Media.PixelFormats.Bgra32
+                : System.Windows.Media.PixelFormats.Bgr24;
+
             var bitmapSource = BitmapSource.Create(
                 width,
                 height,
                 96,
                 96,
-                System.Windows.Media.PixelFormats.Bgra32,
+                pixelFormat,
                 null,
-                bgraData,
+                pixelData,
                 stride
             );
 

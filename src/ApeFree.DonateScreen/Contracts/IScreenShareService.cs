@@ -55,5 +55,12 @@ namespace ApeFree.DonateScreen.Contracts
         /// </summary>
         /// <param name="isPaused">是否暂停推流</param>
         void SetStreamingPaused(bool isPaused);
+
+        /// <summary>
+        /// 增加或设置屏幕画面刷新配额（仅当 newQuota 大于当前剩余配额时生效，保证流控单调递增并清除过期积压）。
+        /// 远程设置了次数为 n 后，计数会变成 n，每次刷新计数都会 -1，到 0 后不再触发屏幕刷新。
+        /// </summary>
+        /// <param name="newQuota">新的刷新帧数配额</param>
+        void SetRefreshQuota(int newQuota);
     }
 }

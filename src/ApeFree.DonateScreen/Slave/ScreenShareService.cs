@@ -2,6 +2,7 @@ using ApeFree.DonateScreen.Capture;
 using ApeFree.DonateScreen.Codecs;
 using ApeFree.DonateScreen.Contracts;
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
@@ -11,6 +12,7 @@ namespace ApeFree.DonateScreen.Slave
     /// <summary>
     /// 远程屏幕共享服务实现（由 Slave 节点暴露）
     /// 负责启动屏幕抓取循环、脏矩形提取、TurboJPEG 压缩与事件推流。
+    /// 支持基于配额的单调流控与高性能内存池复用（零 GC 压力）。
     /// </summary>
     public class ScreenShareService : IScreenShareService, IDisposable
     {
@@ -24,10 +26,19 @@ namespace ApeFree.DonateScreen.Slave
         private CaptureOptionsDto _options = new();
         private readonly List<Rectangle> _accumulatedDirtyRects = new();
 
+        // 刷新配额流控机制
+        private int _remainingRefreshQuota;
+        private readonly AutoResetEvent _quotaWakeEvent = new(false);
+
         public event EventHandler<ScreenFramePacketDto>? FrameArrived;
         public event EventHandler<ScreenTopologyDto>? TopologyChanged;
 
         public ScreenTopologyDto ScreenTopology => _capturer.Topology;
+
+        /// <summary>
+        /// 当前剩余可用刷新配额
+        /// </summary>
+        public int RemainingRefreshQuota => Volatile.Read(ref _remainingRefreshQuota);
 
         /// <summary>
         /// 当前上行实时帧率 (FPS)
@@ -85,6 +96,35 @@ namespace ApeFree.DonateScreen.Slave
             _capturer.RequestKeyFrame();
         }
 
+        /// <summary>
+        /// 增加或设置屏幕画面刷新配额（流控单调递增，配额只能改大不能改小，并清空历史积压直接推最新画面）
+        /// </summary>
+        public void SetRefreshQuota(int newQuota)
+        {
+            if (newQuota <= 0) return;
+
+            int current;
+            do
+            {
+                current = Volatile.Read(ref _remainingRefreshQuota);
+                if (newQuota <= current)
+                {
+                    // 只能改大，不能改小
+                    return;
+                }
+            } while (Interlocked.CompareExchange(ref _remainingRefreshQuota, newQuota, current) != current);
+
+            // 收到刷新的那一刻，清除掉队列积压的旧脏矩形，直接推最新全屏关键帧
+            lock (_accumulatedDirtyRects)
+            {
+                _accumulatedDirtyRects.Clear();
+            }
+            _capturer.RequestKeyFrame();
+
+            // 唤醒处于配额休眠的捕获推流线程
+            _quotaWakeEvent.Set();
+        }
+
         public void UpdateCaptureOptions(CaptureOptionsDto options)
         {
             if (options == null) return;
@@ -106,6 +146,10 @@ namespace ApeFree.DonateScreen.Slave
         public void SetStreamingPaused(bool isPaused)
         {
             _isPaused = isPaused;
+            if (!isPaused)
+            {
+                _quotaWakeEvent.Set();
+            }
         }
 
         /// <summary>
@@ -137,6 +181,7 @@ namespace ApeFree.DonateScreen.Slave
                 if (!_isRunning) return;
                 _isRunning = false;
             }
+            _quotaWakeEvent.Set();
             _workerThread?.Join(1000);
             _workerThread = null;
         }
@@ -149,12 +194,21 @@ namespace ApeFree.DonateScreen.Slave
 
             while (_isRunning)
             {
+                // 流控配额检查：若剩余配额归零，说明客户端已最小化或暂停接收，立即休眠等待
+                if (Volatile.Read(ref _remainingRefreshQuota) <= 0)
+                {
+                    _quotaWakeEvent.WaitOne(100);
+                    continue;
+                }
+
                 int maxFps;
                 int quality;
+                PixelFormatMode pixelFormat;
                 lock (_syncLock)
                 {
                     maxFps = Math.Clamp(_options.MaxFps, 5, 60);
                     quality = Math.Clamp(_options.JpegQuality, 10, 95);
+                    pixelFormat = _options.PixelFormat;
                 }
 
                 int intervalMs = Math.Max(1, 1000 / maxFps);
@@ -162,7 +216,7 @@ namespace ApeFree.DonateScreen.Slave
 
                 if (!_isPaused && FrameArrived != null)
                 {
-                    TryCaptureAndSendFrame(quality, ref bytesCounter, ref fpsCounter);
+                    TryCaptureAndSendFrame(quality, pixelFormat, ref bytesCounter, ref fpsCounter);
                 }
 
                 // 帧率控制延时
@@ -187,7 +241,7 @@ namespace ApeFree.DonateScreen.Slave
             }
         }
 
-        private void TryCaptureAndSendFrame(int quality, ref long bytesCounter, ref int fpsCounter)
+        private void TryCaptureAndSendFrame(int quality, PixelFormatMode pixelFormat, ref long bytesCounter, ref int fpsCounter)
         {
             if (!_capturer.Capture(out byte[] bgraBuffer, out int width, out int height, out int stride, out List<Rectangle> dirtyRects, out bool isKeyFrame))
             {
@@ -246,26 +300,40 @@ namespace ApeFree.DonateScreen.Slave
                 };
 
                 long frameBytes = 0;
+                int bytesPerPixel = (pixelFormat == PixelFormatMode.Bgra32) ? 4 : 3;
 
                 foreach (var rect in optimizedRects)
                 {
                     var clamped = DirtyRectOptimizer.Clamp(rect, width, height);
                     if (clamped.Width <= 0 || clamped.Height <= 0) continue;
 
-                    byte[] subBgra = ExtractSubImage(bgraBuffer, width, height, stride, clamped);
-                    byte[] compressed = TurboJpegCodec.CompressBgra(subBgra, clamped.Width, clamped.Height, clamped.Width * 4, quality);
+                    int subStride = clamped.Width * bytesPerPixel;
+                    int requiredBytes = subStride * clamped.Height;
 
-                    if (compressed.Length > 0)
+                    // 从高性能托管共享数组池中借出缓冲区（完全消除 GC LOH 压力）
+                    byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent(requiredBytes);
+                    try
                     {
-                        packet.Blocks.Add(new DirtyBlockDto
+                        ExtractSubImage(bgraBuffer, width, height, stride, clamped, rentedBuffer, subStride, pixelFormat);
+                        byte[] compressed = TurboJpegCodec.Compress(rentedBuffer, clamped.Width, clamped.Height, subStride, pixelFormat, quality);
+
+                        if (compressed.Length > 0)
                         {
-                            X = clamped.X,
-                            Y = clamped.Y,
-                            Width = clamped.Width,
-                            Height = clamped.Height,
-                            CompressedData = compressed
-                        });
-                        frameBytes += compressed.Length;
+                            packet.Blocks.Add(new DirtyBlockDto
+                            {
+                                X = clamped.X,
+                                Y = clamped.Y,
+                                Width = clamped.Width,
+                                Height = clamped.Height,
+                                PixelFormat = pixelFormat,
+                                CompressedData = compressed
+                            });
+                            frameBytes += compressed.Length;
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(rentedBuffer);
                     }
                 }
 
@@ -274,6 +342,12 @@ namespace ApeFree.DonateScreen.Slave
                     bytesCounter += frameBytes;
                     fpsCounter++;
                     FrameArrived?.Invoke(this, packet);
+
+                    // 成功推流一帧，配额扣减 1
+                    if (Interlocked.Decrement(ref _remainingRefreshQuota) < 0)
+                    {
+                        Interlocked.Exchange(ref _remainingRefreshQuota, 0);
+                    }
                 }
             }
             finally
@@ -283,33 +357,70 @@ namespace ApeFree.DonateScreen.Slave
         }
 
         /// <summary>
-        /// 从全屏 BGRA 缓冲区裁剪出子矩形区域像素
+        /// 从全屏 BGRA 缓冲区提取脏矩形区域，并按目标色彩格式进行通道剥离与色彩量化（支持 RGB24 / RGB565 / BGRA32）
         /// </summary>
-        private static byte[] ExtractSubImage(byte[] source, int fullWidth, int fullHeight, int fullStride, Rectangle rect)
+        private static void ExtractSubImage(byte[] source, int fullWidth, int fullHeight, int fullStride, Rectangle rect, byte[] dest, int destStride, PixelFormatMode formatMode)
         {
-            int subStride = rect.Width * 4;
-            byte[] sub = new byte[subStride * rect.Height];
+            int rectW = rect.Width;
+            int rectH = rect.Height;
 
-            int srcBytesPerPixel = 4;
-            int copyBytes = rect.Width * srcBytesPerPixel;
-
-            for (int row = 0; row < rect.Height; row++)
+            if (formatMode == PixelFormatMode.Bgra32)
             {
-                int srcOffset = (rect.Y + row) * fullStride + rect.X * srcBytesPerPixel;
-                int dstOffset = row * subStride;
-
-                if (srcOffset + copyBytes <= source.Length && dstOffset + copyBytes <= sub.Length)
+                int copyBytes = rectW * 4;
+                for (int row = 0; row < rectH; row++)
                 {
-                    Buffer.BlockCopy(source, srcOffset, sub, dstOffset, copyBytes);
+                    int srcOffset = (rect.Y + row) * fullStride + (rect.X * 4);
+                    int dstOffset = row * destStride;
+                    Buffer.BlockCopy(source, srcOffset, dest, dstOffset, copyBytes);
                 }
             }
+            else if (formatMode == PixelFormatMode.Rgb565)
+            {
+                // 提取并量化为 16位 565 位色（截断低位噪点，大幅提升 JPEG 频域压缩比与传输帧率）
+                for (int row = 0; row < rectH; row++)
+                {
+                    int srcOffset = (rect.Y + row) * fullStride + (rect.X * 4);
+                    int dstOffset = row * destStride;
 
-            return sub;
+                    for (int col = 0; col < rectW; col++)
+                    {
+                        int sIdx = srcOffset + (col * 4);
+                        int dIdx = dstOffset + (col * 3);
+
+                        byte b = source[sIdx];
+                        byte g = source[sIdx + 1];
+                        byte r = source[sIdx + 2];
+
+                        dest[dIdx] = (byte)(b & 0xF8);     // 5 位蓝色
+                        dest[dIdx + 1] = (byte)(g & 0xFC); // 6 位绿色
+                        dest[dIdx + 2] = (byte)(r & 0xF8); // 5 位红色
+                    }
+                }
+            }
+            else // Rgb24 (默认模式，去除 Alpha 通道)
+            {
+                for (int row = 0; row < rectH; row++)
+                {
+                    int srcOffset = (rect.Y + row) * fullStride + (rect.X * 4);
+                    int dstOffset = row * destStride;
+
+                    for (int col = 0; col < rectW; col++)
+                    {
+                        int sIdx = srcOffset + (col * 4);
+                        int dIdx = dstOffset + (col * 3);
+
+                        dest[dIdx] = source[sIdx];         // B
+                        dest[dIdx + 1] = source[sIdx + 1]; // G
+                        dest[dIdx + 2] = source[sIdx + 2]; // R
+                    }
+                }
+            }
         }
 
         public void Dispose()
         {
             Stop();
+            _quotaWakeEvent.Dispose();
             _capturer?.Dispose();
         }
     }
