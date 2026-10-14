@@ -72,15 +72,15 @@ namespace ApeFree.DonateScreen.Tests
             Assert.IsTrue(topo.Width > 0);
             Assert.IsTrue(topo.Height > 0);
 
-            // 4. 测试屏幕帧事件推送
-            var frameReceivedTcs = new TaskCompletionSource<ScreenFramePacketDto>();
+            // 4. 测试屏幕帧事件推送（先设置刷新配额为 1）
+            var frameReceivedTcs = new TaskCompletionSource<ScreenFramePacketDto>(TaskCreationOptions.RunContinuationsAsynchronously);
             session.FrameReceived += (s, frame) =>
             {
                 frameReceivedTcs.TrySetResult(frame);
             };
 
-            // 手动请求一次关键帧
-            session.ScreenService.RequestKeyFrame();
+            // 设置配额流控（触发受控端推流 1 帧）
+            session.ScreenService.SetRefreshQuota(1);
 
             var completedTask = await Task.WhenAny(frameReceivedTcs.Task, Task.Delay(5000));
             Assert.AreEqual(frameReceivedTcs.Task, completedTask, "未能接收到 Slave 推送的屏幕数据帧");
@@ -88,6 +88,7 @@ namespace ApeFree.DonateScreen.Tests
             Assert.IsNotNull(frame);
             Assert.IsTrue(frame.Blocks.Count > 0);
             Assert.IsTrue(frame.Blocks[0].CompressedData.Length > 0);
+            Assert.AreEqual(PixelFormatMode.Rgb24, frame.Blocks[0].PixelFormat, "默认色彩格式应为 Rgb24");
 
             // 5. 测试通过代理调用键鼠控制
             Assert.IsTrue(session.CanControl, "完全控制模式下 session.CanControl 应为 true");
@@ -156,6 +157,27 @@ namespace ApeFree.DonateScreen.Tests
 
             slave.Stop();
             master.Stop();
+        }
+
+        [TestMethod]
+        public void TestQuotaMonotonicityAndFlowControl()
+        {
+            using var service = new ScreenShareService();
+
+            // 初始未配置配额时为 0
+            Assert.AreEqual(0, service.RemainingRefreshQuota);
+
+            // 首次设置 10，变为 10
+            service.SetRefreshQuota(10);
+            Assert.AreEqual(10, service.RemainingRefreshQuota);
+
+            // 尝试设置更小的值 8，应该被忽略，保持为 10
+            service.SetRefreshQuota(8);
+            Assert.AreEqual(10, service.RemainingRefreshQuota);
+
+            // 设置更大的值 15，成功更新为 15
+            service.SetRefreshQuota(15);
+            Assert.AreEqual(15, service.RemainingRefreshQuota);
         }
     }
 }
