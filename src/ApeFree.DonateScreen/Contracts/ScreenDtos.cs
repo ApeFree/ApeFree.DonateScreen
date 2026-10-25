@@ -25,6 +25,22 @@ namespace ApeFree.DonateScreen.Contracts
     }
 
     /// <summary>
+    /// 视频编解码格式类型
+    /// </summary>
+    public enum VideoCodecType
+    {
+        /// <summary>
+        /// FFmpeg H.264 / AVC 实时超低延迟编码（推荐，码率小、画质优且端到端低延迟）
+        /// </summary>
+        H264 = 0,
+
+        /// <summary>
+        /// TurboJPEG 脏矩形切片编码（兼容模式）
+        /// </summary>
+        Jpeg = 1
+    }
+
+    /// <summary>
     /// 像素色彩格式选项
     /// </summary>
     public enum PixelFormatMode
@@ -64,7 +80,7 @@ namespace ApeFree.DonateScreen.Contracts
     }
 
     /// <summary>
-    /// 单个脏矩形增量图像块 DTO
+    /// 单个脏矩形增量图像块 DTO（兼容模式）
     /// </summary>
     public class DirtyBlockDto
     {
@@ -94,13 +110,13 @@ namespace ApeFree.DonateScreen.Contracts
         public PixelFormatMode PixelFormat { get; set; } = PixelFormatMode.Rgb24;
 
         /// <summary>
-        /// 经 TurboJPEG 压缩后的独立 JPEG 字节数据
+        /// 经压缩后的图像块数据
         /// </summary>
         public byte[] CompressedData { get; set; } = Array.Empty<byte>();
     }
 
     /// <summary>
-    /// 屏幕帧数据包（推送至 Master）
+    /// 屏幕视频/图像帧数据包（推送至 Master）
     /// </summary>
     public class ScreenFramePacketDto
     {
@@ -125,12 +141,22 @@ namespace ApeFree.DonateScreen.Contracts
         public int DisplayHeight { get; set; }
 
         /// <summary>
-        /// 是否为全量关键帧 (I-Frame/Full Refresh)
+        /// 是否为全量关键帧 (I-Frame/IDR/Full Refresh)
         /// </summary>
         public bool IsKeyFrame { get; set; }
 
         /// <summary>
-        /// 本帧变动的脏矩形图像块集合
+        /// 视频编码类型
+        /// </summary>
+        public VideoCodecType Codec { get; set; } = VideoCodecType.H264;
+
+        /// <summary>
+        /// 经 FFmpeg H.264 编码的压缩视频帧数据包
+        /// </summary>
+        public byte[] VideoData { get; set; } = Array.Empty<byte>();
+
+        /// <summary>
+        /// 兼容保留字段（脏矩形图像块集合，Codec 为 Jpeg 时使用）
         /// </summary>
         public List<DirtyBlockDto> Blocks { get; set; } = new();
     }
@@ -160,9 +186,14 @@ namespace ApeFree.DonateScreen.Contracts
         public int MaxFps { get; set; } = 30;
 
         /// <summary>
-        /// TurboJPEG 压缩质量 (1~100)
+        /// 编码质量 / CRF (Constant Rate Factor, 18~35，默认 25，越小质量越高)
         /// </summary>
-        public int JpegQuality { get; set; } = 75;
+        public int Crf { get; set; } = 25;
+
+        /// <summary>
+        /// 目标视频码率 (kbps, 默认 2000 kbps)
+        /// </summary>
+        public int BitrateKbps { get; set; } = 2000;
 
         /// <summary>
         /// 选中的显示器索引
@@ -170,9 +201,19 @@ namespace ApeFree.DonateScreen.Contracts
         public int TargetDisplayIndex { get; set; } = 0;
 
         /// <summary>
-        /// 像素色彩格式（默认 Rgb24，去掉 Alpha 通道；可选 Rgb565 极速低功耗）
+        /// 视频编码格式
+        /// </summary>
+        public VideoCodecType Codec { get; set; } = VideoCodecType.H264;
+
+        /// <summary>
+        /// 像素色彩格式
         /// </summary>
         public PixelFormatMode PixelFormat { get; set; } = PixelFormatMode.Rgb24;
+
+        /// <summary>
+        /// 兼容保留质量字段 (1~100)
+        /// </summary>
+        public int JpegQuality { get; set; } = 75;
     }
 
     /// <summary>

@@ -14,7 +14,7 @@
     <Authors>Guijie Lee</Authors>
     <Company>ApeFree</Company>
     <Copyright>Copyright © 2022-2026 ApeFree, All Rights Reserved.</Copyright>
-    <Description>远程主动捐赠式屏幕分享与键鼠控制核心库。基于 DXGI 脏矩形捕获、TurboJPEG 高性能压缩与 ApeRpc 全双工通信。</Description>
+    <Description>远程主动捐赠式屏幕分享与键鼠控制核心库。基于 DXGI 显存捕获、FFmpeg H.264 超低延迟编解码与 ApeRpc 全双工通信。</Description>
 
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
@@ -34,6 +34,8 @@
     <PackageReference Include="ScreenCapture.NET" Version="3.0.0" />
     <PackageReference Include="ScreenCapture.NET.DX11" Version="3.0.0" />
     <PackageReference Include="TurboJpegWrapper" Version="1.5.2" />
+    <PackageReference Include="FFmpeg.AutoGen" Version="9.0.1.1" />
+    <PackageReference Include="FFmpeg.GPL" Version="20261025.1.0" />
   </ItemGroup>
 
 </Project>

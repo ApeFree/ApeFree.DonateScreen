@@ -11,7 +11,7 @@ namespace ApeFree.DonateScreen.Slave
 {
     /// <summary>
     /// 远程屏幕共享服务实现（由 Slave 节点暴露）
-    /// 负责启动屏幕抓取循环、脏矩形提取、TurboJPEG 压缩与事件推流。
+    /// 负责启动屏幕抓取循环、FFmpeg H.264 实时视频流编码（或 TurboJPEG 兼容编码）与事件推流。
     /// 支持基于配额的单调流控与高性能内存池复用（零 GC 压力）。
     /// </summary>
     public class ScreenShareService : IScreenShareService, IDisposable
@@ -19,9 +19,11 @@ namespace ApeFree.DonateScreen.Slave
         private readonly object _syncLock = new();
         private readonly object _pushLock = new();
         private IScreenCapturer _capturer;
+        private FFmpegH264Encoder? _h264Encoder;
         private Thread? _workerThread;
         private volatile bool _isRunning;
         private volatile bool _isPaused;
+        private volatile bool _forceKeyFrame = true;
         private long _frameIndex;
         private CaptureOptionsDto _options = new();
         private readonly List<Rectangle> _accumulatedDirtyRects = new();
@@ -58,7 +60,7 @@ namespace ApeFree.DonateScreen.Slave
         /// <summary>
         /// 当前底层捕获引擎名称
         /// </summary>
-        public string EngineName => _capturer.EngineName;
+        public string EngineName => $"FFmpeg H.264 ({_capturer.EngineName})";
 
         private ScreenShareMode _shareMode = ScreenShareMode.FullControl;
         private string _nodeName = string.Empty;
@@ -93,7 +95,9 @@ namespace ApeFree.DonateScreen.Slave
 
         public void RequestKeyFrame()
         {
+            _forceKeyFrame = true;
             _capturer.RequestKeyFrame();
+            _quotaWakeEvent.Set();
         }
 
         /// <summary>
@@ -119,10 +123,7 @@ namespace ApeFree.DonateScreen.Slave
             {
                 _accumulatedDirtyRects.Clear();
             }
-            _capturer.RequestKeyFrame();
-
-            // 唤醒处于配额休眠的捕获推流线程
-            _quotaWakeEvent.Set();
+            RequestKeyFrame();
         }
 
         public void UpdateCaptureOptions(CaptureOptionsDto options)
@@ -140,6 +141,8 @@ namespace ApeFree.DonateScreen.Slave
                     TopologyChanged?.Invoke(this, _capturer.Topology);
                     RequestKeyFrame();
                 }
+
+                _h264Encoder?.UpdateConfig(_options.MaxFps, _options.Crf);
             }
         }
 
@@ -202,13 +205,17 @@ namespace ApeFree.DonateScreen.Slave
                 }
 
                 int maxFps;
+                int crf;
                 int quality;
                 PixelFormatMode pixelFormat;
+                VideoCodecType codec;
                 lock (_syncLock)
                 {
                     maxFps = Math.Clamp(_options.MaxFps, 5, 60);
+                    crf = Math.Clamp(_options.Crf, 15, 40);
                     quality = Math.Clamp(_options.JpegQuality, 10, 95);
                     pixelFormat = _options.PixelFormat;
+                    codec = _options.Codec;
                 }
 
                 int intervalMs = Math.Max(1, 1000 / maxFps);
@@ -216,7 +223,7 @@ namespace ApeFree.DonateScreen.Slave
 
                 if (!_isPaused && FrameArrived != null)
                 {
-                    TryCaptureAndSendFrame(quality, pixelFormat, ref bytesCounter, ref fpsCounter);
+                    TryCaptureAndSendFrame(maxFps, crf, quality, pixelFormat, codec, ref bytesCounter, ref fpsCounter);
                 }
 
                 // 帧率控制延时
@@ -241,7 +248,7 @@ namespace ApeFree.DonateScreen.Slave
             }
         }
 
-        private void TryCaptureAndSendFrame(int quality, PixelFormatMode pixelFormat, ref long bytesCounter, ref int fpsCounter)
+        private void TryCaptureAndSendFrame(int maxFps, int crf, int quality, PixelFormatMode pixelFormat, VideoCodecType codec, ref long bytesCounter, ref int fpsCounter)
         {
             if (!_capturer.Capture(out byte[] bgraBuffer, out int width, out int height, out int stride, out List<Rectangle> dirtyRects, out bool isKeyFrame))
             {
@@ -253,7 +260,7 @@ namespace ApeFree.DonateScreen.Slave
             {
                 lock (_accumulatedDirtyRects)
                 {
-                    if (isKeyFrame)
+                    if (isKeyFrame || _forceKeyFrame)
                     {
                         _accumulatedDirtyRects.Clear();
                         _accumulatedDirtyRects.Add(new Rectangle(0, 0, width, height));
@@ -268,6 +275,56 @@ namespace ApeFree.DonateScreen.Slave
 
             try
             {
+                bool forceKey = isKeyFrame || _forceKeyFrame;
+
+                // 1. FFmpeg H.264 视频流编码分支（默认主通道）
+                if (codec == VideoCodecType.H264)
+                {
+                    // 若画面完全无变动且未强制请求关键帧，则跳过传输以省带宽和 CPU
+                    if (!forceKey && dirtyRects.Count == 0 && _accumulatedDirtyRects.Count == 0)
+                    {
+                        return;
+                    }
+
+                    lock (_syncLock)
+                    {
+                        if (_h264Encoder == null || _h264Encoder.Width != width || _h264Encoder.Height != height)
+                        {
+                            _h264Encoder?.Dispose();
+                            _h264Encoder = new FFmpegH264Encoder(width, height, maxFps, crf);
+                            forceKey = true;
+                        }
+                    }
+
+                    byte[]? videoPacket = _h264Encoder.EncodeFrame(bgraBuffer, width, height, stride, forceKey, out bool outIsKeyFrame);
+                    if (videoPacket != null && videoPacket.Length > 0)
+                    {
+                        _forceKeyFrame = false;
+
+                        var packet = new ScreenFramePacketDto
+                        {
+                            FrameIndex = Interlocked.Increment(ref _frameIndex),
+                            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                            DisplayWidth = width,
+                            DisplayHeight = height,
+                            IsKeyFrame = outIsKeyFrame,
+                            Codec = VideoCodecType.H264,
+                            VideoData = videoPacket
+                        };
+
+                        bytesCounter += videoPacket.Length;
+                        fpsCounter++;
+                        FrameArrived?.Invoke(this, packet);
+
+                        if (Interlocked.Decrement(ref _remainingRefreshQuota) < 0)
+                        {
+                            Interlocked.Exchange(ref _remainingRefreshQuota, 0);
+                        }
+                    }
+                    return;
+                }
+
+                // 2. TurboJPEG 兼容模式：切片脏矩形编码分支
                 List<Rectangle> finalRects;
                 lock (_accumulatedDirtyRects)
                 {
@@ -283,20 +340,20 @@ namespace ApeFree.DonateScreen.Slave
                     }
                 }
 
-                // 优化合并细碎脏矩形
-                var optimizedRects = isKeyFrame
+                var optimizedRects = forceKey
                     ? new List<Rectangle> { new Rectangle(0, 0, width, height) }
                     : DirtyRectOptimizer.Optimize(finalRects);
 
                 if (optimizedRects.Count == 0) return;
 
-                var packet = new ScreenFramePacketDto
+                var jpegPacket = new ScreenFramePacketDto
                 {
                     FrameIndex = Interlocked.Increment(ref _frameIndex),
                     Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                     DisplayWidth = width,
                     DisplayHeight = height,
-                    IsKeyFrame = isKeyFrame
+                    IsKeyFrame = forceKey,
+                    Codec = VideoCodecType.Jpeg
                 };
 
                 long frameBytes = 0;
@@ -310,7 +367,6 @@ namespace ApeFree.DonateScreen.Slave
                     int subStride = clamped.Width * bytesPerPixel;
                     int requiredBytes = subStride * clamped.Height;
 
-                    // 从高性能托管共享数组池中借出缓冲区（完全消除 GC LOH 压力）
                     byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent(requiredBytes);
                     try
                     {
@@ -319,7 +375,7 @@ namespace ApeFree.DonateScreen.Slave
 
                         if (compressed.Length > 0)
                         {
-                            packet.Blocks.Add(new DirtyBlockDto
+                            jpegPacket.Blocks.Add(new DirtyBlockDto
                             {
                                 X = clamped.X,
                                 Y = clamped.Y,
@@ -337,13 +393,13 @@ namespace ApeFree.DonateScreen.Slave
                     }
                 }
 
-                if (packet.Blocks.Count > 0)
+                if (jpegPacket.Blocks.Count > 0)
                 {
+                    _forceKeyFrame = false;
                     bytesCounter += frameBytes;
                     fpsCounter++;
-                    FrameArrived?.Invoke(this, packet);
+                    FrameArrived?.Invoke(this, jpegPacket);
 
-                    // 成功推流一帧，配额扣减 1
                     if (Interlocked.Decrement(ref _remainingRefreshQuota) < 0)
                     {
                         Interlocked.Exchange(ref _remainingRefreshQuota, 0);
@@ -356,9 +412,6 @@ namespace ApeFree.DonateScreen.Slave
             }
         }
 
-        /// <summary>
-        /// 从全屏 BGRA 缓冲区提取脏矩形区域，并按目标色彩格式进行通道剥离与色彩量化（支持 RGB24 / RGB565 / BGRA32）
-        /// </summary>
         private static void ExtractSubImage(byte[] source, int fullWidth, int fullHeight, int fullStride, Rectangle rect, byte[] dest, int destStride, PixelFormatMode formatMode)
         {
             int rectW = rect.Width;
@@ -376,7 +429,6 @@ namespace ApeFree.DonateScreen.Slave
             }
             else if (formatMode == PixelFormatMode.Rgb565)
             {
-                // 提取并量化为 16位 565 位色（截断低位噪点，大幅提升 JPEG 频域压缩比与传输帧率）
                 for (int row = 0; row < rectH; row++)
                 {
                     int srcOffset = (rect.Y + row) * fullStride + (rect.X * 4);
@@ -391,13 +443,13 @@ namespace ApeFree.DonateScreen.Slave
                         byte g = source[sIdx + 1];
                         byte r = source[sIdx + 2];
 
-                        dest[dIdx] = (byte)(b & 0xF8);     // 5 位蓝色
-                        dest[dIdx + 1] = (byte)(g & 0xFC); // 6 位绿色
-                        dest[dIdx + 2] = (byte)(r & 0xF8); // 5 位红色
+                        dest[dIdx] = (byte)(b & 0xF8);
+                        dest[dIdx + 1] = (byte)(g & 0xFC);
+                        dest[dIdx + 2] = (byte)(r & 0xF8);
                     }
                 }
             }
-            else // Rgb24 (默认模式，去除 Alpha 通道)
+            else // Rgb24
             {
                 for (int row = 0; row < rectH; row++)
                 {
@@ -409,9 +461,9 @@ namespace ApeFree.DonateScreen.Slave
                         int sIdx = srcOffset + (col * 4);
                         int dIdx = dstOffset + (col * 3);
 
-                        dest[dIdx] = source[sIdx];         // B
-                        dest[dIdx + 1] = source[sIdx + 1]; // G
-                        dest[dIdx + 2] = source[sIdx + 2]; // R
+                        dest[dIdx] = source[sIdx];
+                        dest[dIdx + 1] = source[sIdx + 1];
+                        dest[dIdx + 2] = source[sIdx + 2];
                     }
                 }
             }
@@ -421,6 +473,7 @@ namespace ApeFree.DonateScreen.Slave
         {
             Stop();
             _quotaWakeEvent.Dispose();
+            _h264Encoder?.Dispose();
             _capturer?.Dispose();
         }
     }
