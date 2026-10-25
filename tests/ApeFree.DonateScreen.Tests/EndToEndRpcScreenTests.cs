@@ -27,7 +27,7 @@ namespace ApeFree.DonateScreen.Tests
             bool started = await master.StartAsync();
             Assert.IsTrue(started, "Master 启动失败");
 
-            // 2. 启动 Slave 节点（完全控制模式）
+            // 2. 启动 Slave 节点（完全控制模式，默认使用 FFmpeg H.264 编码）
             var slaveOptions = new ScreenSlaveOptions
             {
                 MasterHost = "127.0.0.1",
@@ -72,7 +72,7 @@ namespace ApeFree.DonateScreen.Tests
             Assert.IsTrue(topo.Width > 0);
             Assert.IsTrue(topo.Height > 0);
 
-            // 4. 测试屏幕帧事件推送（先设置刷新配额为 1）
+            // 4. 测试 FFmpeg H.264 屏幕帧事件推送（先设置刷新配额为 1）
             var frameReceivedTcs = new TaskCompletionSource<ScreenFramePacketDto>(TaskCreationOptions.RunContinuationsAsynchronously);
             session.FrameReceived += (s, frame) =>
             {
@@ -86,9 +86,10 @@ namespace ApeFree.DonateScreen.Tests
             Assert.AreEqual(frameReceivedTcs.Task, completedTask, "未能接收到 Slave 推送的屏幕数据帧");
             var frame = await frameReceivedTcs.Task;
             Assert.IsNotNull(frame);
-            Assert.IsTrue(frame.Blocks.Count > 0);
-            Assert.IsTrue(frame.Blocks[0].CompressedData.Length > 0);
-            Assert.AreEqual(PixelFormatMode.Rgb24, frame.Blocks[0].PixelFormat, "默认色彩格式应为 Rgb24");
+            Assert.AreEqual(VideoCodecType.H264, frame.Codec, "默认编解码器应为 FFmpeg H.264");
+            Assert.IsNotNull(frame.VideoData, "H.264 视频数据包不应为空");
+            Assert.IsTrue(frame.VideoData.Length > 0, "H.264 视频数据长度应大于 0");
+            Assert.IsTrue(frame.IsKeyFrame, "配额重置/首帧推流应为关键帧");
 
             // 5. 测试通过代理调用键鼠控制
             Assert.IsTrue(session.CanControl, "完全控制模式下 session.CanControl 应为 true");
