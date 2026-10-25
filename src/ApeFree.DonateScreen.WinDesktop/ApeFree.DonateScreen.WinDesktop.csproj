@@ -25,7 +25,8 @@
 
   <ItemGroup>
     <PackageReference Include="ApeFree.ApeRpc.BytesIO" Version="0.0.3-alpha61009" />
-    <PackageReference Include="TurboJpegWrapper" Version="1.5.2" />
+    <PackageReference Include="FFmpeg.AutoGen" Version="9.0.1.1" />
+    <PackageReference Include="FFmpeg.GPL" Version="20261025.1.0" />
   </ItemGroup>
 
 </Project>

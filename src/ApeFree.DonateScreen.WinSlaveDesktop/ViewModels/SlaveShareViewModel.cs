@@ -19,7 +19,11 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
         private bool _isFullControl = true;
         private bool _isViewOnly = false;
         private int _maxFps = 30;
+        private int _crf = 25;
         private int _jpegQuality = 75;
+        private VideoCodecType _selectedCodec = VideoCodecType.H264;
+        private PixelFormatMode _selectedPixelFormat = PixelFormatMode.Rgb24;
+
         private bool _isConnected = false;
         private string _statusText = "就绪 (未连接)";
         private int _currentFps = 0;
@@ -81,6 +85,17 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             }
         }
 
+        public int Crf
+        {
+            get => _crf;
+            set
+            {
+                _crf = value;
+                OnPropertyChanged();
+                UpdateOptions();
+            }
+        }
+
         public int JpegQuality
         {
             get => _jpegQuality;
@@ -92,7 +107,31 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             }
         }
 
-        private PixelFormatMode _selectedPixelFormat = PixelFormatMode.Rgb24;
+        public VideoCodecType SelectedCodec
+        {
+            get => _selectedCodec;
+            set
+            {
+                _selectedCodec = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(SelectedCodecIndex));
+                OnPropertyChanged(nameof(IsH264));
+                OnPropertyChanged(nameof(IsJpeg));
+                UpdateOptions();
+            }
+        }
+
+        public bool IsH264 => SelectedCodec == VideoCodecType.H264;
+        public bool IsJpeg => SelectedCodec == VideoCodecType.Jpeg;
+
+        public int SelectedCodecIndex
+        {
+            get => (int)_selectedCodec;
+            set
+            {
+                SelectedCodec = (VideoCodecType)Math.Clamp(value, 0, 1);
+            }
+        }
 
         public PixelFormatMode SelectedPixelFormat
         {
@@ -187,8 +226,10 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 CaptureOptions = new CaptureOptionsDto
                 {
                     MaxFps = MaxFps,
+                    Crf = Crf,
                     JpegQuality = JpegQuality,
-                    PixelFormat = SelectedPixelFormat
+                    PixelFormat = SelectedPixelFormat,
+                    Codec = SelectedCodec
                 },
                 AutoReconnect = true
             };
@@ -208,7 +249,7 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             if (success)
             {
                 StatusText = $"已成功连接至 {MasterHost}:{MasterPort}";
-                EngineName = _slaveNode.ScreenService?.EngineName ?? "DirectX/GDI";
+                EngineName = _slaveNode.ScreenService?.EngineName ?? "FFmpeg H.264 / DirectX";
             }
             else
             {
@@ -262,8 +303,10 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 _slaveNode.ScreenService.UpdateCaptureOptions(new CaptureOptionsDto
                 {
                     MaxFps = MaxFps,
+                    Crf = Crf,
                     JpegQuality = JpegQuality,
-                    PixelFormat = SelectedPixelFormat
+                    PixelFormat = SelectedPixelFormat,
+                    Codec = SelectedCodec
                 });
             }
         }

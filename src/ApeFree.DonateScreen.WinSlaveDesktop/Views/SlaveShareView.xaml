@@ -5,8 +5,12 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:vm="clr-namespace:ApeFree.DonateScreen.WinSlaveDesktop.ViewModels"
              mc:Ignorable="d" 
-             d:DesignHeight="600" d:DesignWidth="450"
+             d:DesignHeight="650" d:DesignWidth="450"
              Background="#F3F3F3" FontFamily="Segoe UI, Microsoft YaHei">
+    <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
+
     <UserControl.DataContext>
         <vm:SlaveShareViewModel x:Name="ViewModel" />
     </UserControl.DataContext>
@@ -73,6 +77,14 @@
                 <StackPanel>
                     <TextBlock Text="画质与性能调节" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,10" Foreground="#333333"/>
 
+                    <Grid Margin="0,0,0,4">
+                        <TextBlock Text="传输编码方案" FontSize="12" Foreground="#555555"/>
+                    </Grid>
+                    <ComboBox SelectedIndex="{Binding SelectedCodecIndex}" Height="28" Margin="0,0,0,12">
+                        <ComboBoxItem Content="FFmpeg H.264 (超低延迟 zerolatency，推荐)"/>
+                        <ComboBoxItem Content="TurboJPEG (差量分块压缩)"/>
+                    </ComboBox>
+
                     <Grid Margin="0,0,0,8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -83,15 +95,31 @@
                     </Grid>
                     <Slider Minimum="10" Maximum="60" Value="{Binding MaxFps}" SmallChange="5" LargeChange="10" TickFrequency="10" IsSnapToTickEnabled="True" Margin="0,0,0,12"/>
 
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="TurboJPEG 压缩质量" FontSize="12" Foreground="#555555"/>
-                        <TextBlock Grid.Column="1" Text="{Binding JpegQuality, StringFormat='{}{0}%'}" FontSize="12" FontWeight="SemiBold" Foreground="#0078D4"/>
-                    </Grid>
-                    <Slider Minimum="20" Maximum="95" Value="{Binding JpegQuality}" SmallChange="5" LargeChange="10" Margin="0,0,0,8"/>
+                    <!-- H.264 CRF 质量设置 -->
+                    <StackPanel Visibility="{Binding IsH264, Converter={StaticResource BoolToVis}}">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="H.264 恒定质量 (CRF, 越小画质越高)" FontSize="12" Foreground="#555555"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Crf, StringFormat='{}CRF {0}'}" FontSize="12" FontWeight="SemiBold" Foreground="#0078D4"/>
+                        </Grid>
+                        <Slider Minimum="18" Maximum="36" Value="{Binding Crf}" SmallChange="1" LargeChange="2" TickFrequency="1" IsSnapToTickEnabled="True" Margin="0,0,0,12"/>
+                    </StackPanel>
+
+                    <!-- TurboJPEG 质量设置 -->
+                    <StackPanel Visibility="{Binding IsJpeg, Converter={StaticResource BoolToVis}}">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="TurboJPEG 压缩质量" FontSize="12" Foreground="#555555"/>
+                            <TextBlock Grid.Column="1" Text="{Binding JpegQuality, StringFormat='{}{0}%'}" FontSize="12" FontWeight="SemiBold" Foreground="#0078D4"/>
+                        </Grid>
+                        <Slider Minimum="20" Maximum="95" Value="{Binding JpegQuality}" SmallChange="5" LargeChange="10" Margin="0,0,0,12"/>
+                    </StackPanel>
 
                     <Grid Margin="0,0,0,4">
                         <TextBlock Text="色彩深度与图像质量" FontSize="12" Foreground="#555555"/>
