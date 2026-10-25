@@ -86,8 +86,10 @@ namespace ApeFree.DonateScreen.Input
             if (dto.Flags.HasFlag(MouseActionFlags.MiddleUp)) flags |= MOUSEEVENTF_MIDDLEUP;
             if (dto.Flags.HasFlag(MouseActionFlags.Wheel)) flags |= MOUSEEVENTF_WHEEL;
 
-            // 无论是否有 Move，只要包含绝对坐标转换标志，均按绝对坐标对齐
-            flags |= (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
+            // 关键优化：无论是否有纯 Move，只要附带坐标，均附带 MOUSEEVENTF_MOVE 并按绝对坐标对齐。
+            // 确保 Windows SendInput 在改变按键状态（按下/松开）的同一瞬间原子性地将光标精准移动到目标坐标，
+            // 彻底解决 Visual Studio、CMD 等窗口在旧坐标处按下或拖拽脱节的问题。
+            flags |= (MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
 
             var input = new INPUT
             {
@@ -187,10 +189,24 @@ namespace ApeFree.DonateScreen.Input
         }
 
         /// <summary>
-        /// 紧急复位所有关键修饰键（释放 Ctrl, Shift, Alt, Win 状态）
+        /// 紧急复位所有输入状态（强制释放鼠标按键与修饰键 Ctrl, Shift, Alt, Win 状态）
         /// </summary>
         public static void ResetKeyStates()
         {
+            // 1. 强制释放所有可能卡住的鼠标按键 (Left, Right, Middle)
+            var mouseReleaseInput = new INPUT
+            {
+                type = INPUT_MOUSE,
+                mi = new MOUSEINPUT
+                {
+                    dwFlags = MOUSEEVENTF_LEFTUP | MOUSEEVENTF_RIGHTUP | MOUSEEVENTF_MIDDLEUP,
+                    time = 0,
+                    dwExtraInfo = IntPtr.Zero
+                }
+            };
+            SendInput(1, new[] { mouseReleaseInput }, Marshal.SizeOf<INPUT>());
+
+            // 2. 释放键盘修饰键
             int[] modifierKeys = new int[]
             {
                 0x10, // VK_SHIFT
