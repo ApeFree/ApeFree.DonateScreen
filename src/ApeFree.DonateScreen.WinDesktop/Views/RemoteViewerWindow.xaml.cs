@@ -3,6 +3,7 @@ using ApeFree.DonateScreen.Master;
 using ApeFree.DonateScreen.Rendering;
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -23,10 +24,21 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
         private int _framesReceivedSinceRefill = 0;
         private bool _isFullscreen = false;
 
+        // 鼠标按键与拖拽状态跟踪
+        private bool _isLeftDown = false;
+        private bool _isRightDown = false;
+        private bool _isMiddleDown = false;
+        private ushort _lastNormX = 32768;
+        private ushort _lastNormY = 32768;
+
         public RemoteViewerWindow(SlaveSession session)
         {
             InitializeComponent();
             _session = session ?? throw new ArgumentNullException(nameof(session));
+
+            // 恢复标准鼠标指针形状
+            Cursor = Cursors.Arrow;
+            ImgDisplay.Cursor = Cursors.Arrow;
 
             Title = $"远程控制 - {_session.Info.MachineName} ({_session.RemoteAddress})";
             TxtDeviceTitle.Text = string.IsNullOrWhiteSpace(_session.Info.MachineName) ? _session.RemoteAddress : _session.Info.MachineName;
@@ -79,6 +91,10 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
                 _blitter.RenderPacket(e);
                 _fpsCounter++;
 
+                if (e.VideoData != null)
+                {
+                    _bytesCounter += e.VideoData.Length;
+                }
                 foreach (var b in e.Blocks)
                 {
                     _bytesCounter += b.CompressedData?.Length ?? 0;
@@ -121,10 +137,10 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
 
         #region 键盘与鼠标输入映射
 
-        private bool TryGetNormalizedCoordinates(Point mousePos, out ushort normX, out ushort normY)
+        private bool TryGetNormalizedCoordinates(Point mousePos, out ushort normX, out ushort normY, bool clampToViewport = true)
         {
-            normX = 0;
-            normY = 0;
+            normX = _lastNormX;
+            normY = _lastNormY;
 
             if (ImgDisplay.Source == null || ImgDisplay.ActualWidth <= 0 || ImgDisplay.ActualHeight <= 0)
             {
@@ -149,45 +165,75 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
             double clickX = mousePos.X - offsetX;
             double clickY = mousePos.Y - offsetY;
 
-            // 判断是否点击在黑边外
-            if (clickX < 0 || clickX > viewW || clickY < 0 || clickY > viewH)
+            // 如果不限制在黑边内且未处于按键拖拽状态，当移出有效视口时忽略普通移动
+            if (!clampToViewport)
             {
-                return false;
+                if (clickX < 0 || clickX > viewW || clickY < 0 || clickY > viewH)
+                {
+                    return false;
+                }
             }
 
-            // 换算为 0 ~ 65535 归一化绝对坐标
-            double ratioX = clickX / viewW;
-            double ratioY = clickY / viewH;
+            // 限制在视口边界内 [0, viewW], [0, viewH]
+            double clampedX = Math.Clamp(clickX, 0, viewW);
+            double clampedY = Math.Clamp(clickY, 0, viewH);
+
+            double ratioX = clampedX / viewW;
+            double ratioY = clampedY / viewH;
 
             normX = (ushort)Math.Clamp((int)(ratioX * 65535), 0, 65535);
             normY = (ushort)Math.Clamp((int)(ratioY * 65535), 0, 65535);
+            _lastNormX = normX;
+            _lastNormY = normY;
             return true;
         }
 
-        private void SendMouseIfAllowed(MouseActionFlags flags, MouseEventArgs e, int wheelDelta = 0)
+        private void SendMouseIfAllowed(MouseActionFlags flags, MouseEventArgs e, int wheelDelta = 0, bool isButtonEvent = false, bool clampToViewport = true)
         {
             if (!_session.CanControl || _session.InputService == null) return;
 
             var pos = e.GetPosition(ImgDisplay);
-            if (TryGetNormalizedCoordinates(pos, out ushort nx, out ushort ny))
+            if (TryGetNormalizedCoordinates(pos, out ushort nx, out ushort ny, clampToViewport: clampToViewport || isButtonEvent))
             {
-                _session.InputService.SendMouseEvent(new MouseEventDto
-                {
-                    NormalizedX = nx,
-                    NormalizedY = ny,
-                    Flags = flags,
-                    WheelDelta = wheelDelta
-                });
+                SendMouseRaw(flags, nx, ny, wheelDelta);
             }
+        }
+
+        private void SendMouseRaw(MouseActionFlags flags, ushort normX, ushort normY, int wheelDelta = 0)
+        {
+            if (!_session.CanControl || _session.InputService == null) return;
+
+            var dto = new MouseEventDto
+            {
+                NormalizedX = normX,
+                NormalizedY = normY,
+                Flags = flags,
+                WheelDelta = wheelDelta
+            };
+
+            // 在后台线程异步派发 RPC，绝不阻塞 WPF UI 交互线程
+            Task.Run(() =>
+            {
+                try
+                {
+                    _session.InputService?.SendMouseEvent(dto);
+                }
+                catch { }
+            });
         }
 
         private void OnImageMouseMove(object sender, MouseEventArgs e)
         {
-            SendMouseIfAllowed(MouseActionFlags.Move, e);
+            // 如果处于按住拖拽状态，允许跨越黑边持续跟踪
+            bool isDragging = _isLeftDown || _isRightDown || _isMiddleDown;
+            SendMouseIfAllowed(MouseActionFlags.Move, e, clampToViewport: isDragging);
         }
 
         private void OnImageMouseDown(object sender, MouseButtonEventArgs e)
         {
+            ImgDisplay.Focus();
+            ImgDisplay.CaptureMouse(); // 捕获鼠标，确保拖拽期间持续获取移动和释放事件
+
             MouseActionFlags flag = e.ChangedButton switch
             {
                 MouseButton.Left => MouseActionFlags.LeftDown,
@@ -196,9 +242,13 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
                 _ => MouseActionFlags.None
             };
 
+            if (e.ChangedButton == MouseButton.Left) _isLeftDown = true;
+            if (e.ChangedButton == MouseButton.Right) _isRightDown = true;
+            if (e.ChangedButton == MouseButton.Middle) _isMiddleDown = true;
+
             if (flag != MouseActionFlags.None)
             {
-                SendMouseIfAllowed(flag, e);
+                SendMouseIfAllowed(flag, e, isButtonEvent: true);
             }
         }
 
@@ -212,15 +262,55 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
                 _ => MouseActionFlags.None
             };
 
+            if (e.ChangedButton == MouseButton.Left) _isLeftDown = false;
+            if (e.ChangedButton == MouseButton.Right) _isRightDown = false;
+            if (e.ChangedButton == MouseButton.Middle) _isMiddleDown = false;
+
             if (flag != MouseActionFlags.None)
             {
-                SendMouseIfAllowed(flag, e);
+                SendMouseIfAllowed(flag, e, isButtonEvent: true);
+            }
+
+            // 当所有按键都已松开时，释放鼠标捕获
+            if (!_isLeftDown && !_isRightDown && !_isMiddleDown)
+            {
+                ImgDisplay.ReleaseMouseCapture();
             }
         }
 
         private void OnImageMouseWheel(object sender, MouseWheelEventArgs e)
         {
             SendMouseIfAllowed(MouseActionFlags.Wheel, e, e.Delta);
+        }
+
+        private void OnImageLostMouseCapture(object sender, MouseEventArgs e)
+        {
+            ReleaseStuckButtons();
+        }
+
+        protected override void OnDeactivated(EventArgs e)
+        {
+            base.OnDeactivated(e);
+            ReleaseStuckButtons();
+        }
+
+        private void ReleaseStuckButtons()
+        {
+            if (_isLeftDown)
+            {
+                _isLeftDown = false;
+                SendMouseRaw(MouseActionFlags.LeftUp, _lastNormX, _lastNormY);
+            }
+            if (_isRightDown)
+            {
+                _isRightDown = false;
+                SendMouseRaw(MouseActionFlags.RightUp, _lastNormX, _lastNormY);
+            }
+            if (_isMiddleDown)
+            {
+                _isMiddleDown = false;
+                SendMouseRaw(MouseActionFlags.MiddleUp, _lastNormX, _lastNormY);
+            }
         }
 
         private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -230,11 +320,15 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
             ushort vk = (ushort)KeyInterop.VirtualKeyFromKey(e.Key);
             if (vk != 0)
             {
-                _session.InputService.SendKeyEvent(new KeyEventDto
+                var dto = new KeyEventDto
                 {
                     VirtualKey = vk,
                     IsKeyDown = true,
                     IsExtendedKey = (e.Key == Key.RightAlt || e.Key == Key.RightCtrl)
+                };
+                Task.Run(() =>
+                {
+                    try { _session.InputService?.SendKeyEvent(dto); } catch { }
                 });
                 e.Handled = true;
             }
@@ -247,11 +341,15 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
             ushort vk = (ushort)KeyInterop.VirtualKeyFromKey(e.Key);
             if (vk != 0)
             {
-                _session.InputService.SendKeyEvent(new KeyEventDto
+                var dto = new KeyEventDto
                 {
                     VirtualKey = vk,
                     IsKeyDown = false,
                     IsExtendedKey = (e.Key == Key.RightAlt || e.Key == Key.RightCtrl)
+                };
+                Task.Run(() =>
+                {
+                    try { _session.InputService?.SendKeyEvent(dto); } catch { }
                 });
                 e.Handled = true;
             }
@@ -285,7 +383,10 @@ namespace ApeFree.DonateScreen.WinDesktop.Views
                 new() { VirtualKey = 0x12, IsKeyDown = false }, // Alt up
                 new() { VirtualKey = 0x11, IsKeyDown = false }  // Ctrl up
             };
-            _session.InputService.SendKeySequence(cadSequence);
+            Task.Run(() =>
+            {
+                try { _session.InputService?.SendKeySequence(cadSequence); } catch { }
+            });
         }
 
         private void OnToggleFullscreenClicked(object sender, RoutedEventArgs e)

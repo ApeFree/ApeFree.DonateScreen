@@ -45,7 +45,8 @@
                        MouseDown="OnImageMouseDown"
                        MouseUp="OnImageMouseUp"
                        MouseWheel="OnImageMouseWheel"
-                       Cursor="Cross"/>
+                       LostMouseCapture="OnImageLostMouseCapture"
+                       Cursor="Arrow"/>
 
                 <!-- 只读水印提示 -->
                 <Border x:Name="BorderViewOnlyNotice" Background="#AA000000" CornerRadius="6" Padding="12,6" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="16" Visibility="Collapsed">

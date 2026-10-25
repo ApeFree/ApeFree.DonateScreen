@@ -16,6 +16,7 @@
     <Company>ApeFree</Company>
     <Copyright>Copyright © 2022-2026 ApeFree, All Rights Reserved.</Copyright>
     <Description>ApeFree.DonateScreen 远程受控端桌面程序 (支持分享本地屏幕与键盘鼠标控制权)</Description>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
