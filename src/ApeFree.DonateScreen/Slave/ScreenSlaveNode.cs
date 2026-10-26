@@ -2,6 +2,9 @@ using ApeFree.ApeRpc;
 using ApeFree.ApeRpc.BytesIO;
 using ApeFree.DonateScreen.Contracts;
 using ApeFree.DonateScreen.Master;
+using ApeFree.DonateScreen.P2P;
+using STTech.BytesIO.Core;
+using STTech.BytesIO.P2P;
 using STTech.BytesIO.Tcp;
 using System;
 using System.Threading;
@@ -11,14 +14,14 @@ namespace ApeFree.DonateScreen.Slave
 {
     /// <summary>
     /// Slave 受控端节点管理器。
-    /// 负责主动向 Master 建立 TCP 连接、挂载 ApeRpc 插件、发布屏幕与键鼠服务。
+    /// 负责主动向 Master 建立 TCP 连接或 P2P (Libp2p) 去中心化中继、挂载 ApeRpc 插件、发布屏幕与键鼠服务。
     /// </summary>
     public class ScreenSlaveNode : IDisposable
     {
         private readonly ScreenSlaveOptions _options;
         private readonly object _lock = new();
         private RpcTerminal? _terminal;
-        private TcpClient? _tcpClient;
+        private BytesClient? _client;
         private BytesRpcTerminalAddon? _addon;
         private ScreenShareService? _screenService;
         private InputControlService? _inputService;
@@ -33,7 +36,12 @@ namespace ApeFree.DonateScreen.Slave
         /// <summary>
         /// 是否处于已连接状态
         /// </summary>
-        public bool IsConnected => _tcpClient != null && _tcpClient.IsConnected;
+        public bool IsConnected => _client != null && _client.IsConnected;
+
+        /// <summary>
+        /// 若处于 P2P 模式，获取当前本地节点的 PeerId
+        /// </summary>
+        public string? LocalPeerId => (_client as PeerClient)?.LocalPeerId ?? P2PAddressHelper.GetPeerIdFromSeed(_options.IdentitySeed);
 
         /// <summary>
         /// 屏幕共享核心服务
@@ -81,15 +89,46 @@ namespace ApeFree.DonateScreen.Slave
 
                 _terminal = new RpcTerminal(new TerminalInfo { Name = nodeName });
 
-                // 2. 创建通信客户端
-                _tcpClient = new TcpClient
+                // 2. 创建通信客户端 (P2P 或标准 TCP)
+                if (_options.UseP2P)
                 {
-                    Host = _options.MasterHost,
-                    Port = _options.MasterPort
-                };
+                    var peerClient = new PeerClient();
+                    peerClient.Options.EnableRelay = _options.EnableRelay;
+                    peerClient.Options.EnableDht = _options.EnableDht;
+                    peerClient.Options.EnableMdns = _options.EnableMdns;
+                    peerClient.Options.EnableQuic = _options.EnableQuic;
+
+                    if (!string.IsNullOrWhiteSpace(_options.IdentitySeed))
+                    {
+                        peerClient.Options.IdentitySeed = P2PAddressHelper.ParseSeed(_options.IdentitySeed);
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(_options.P2PServerAddress))
+                    {
+                        peerClient.RemoteAddress = P2PAddressHelper.ResolveServerMultiaddr(_options.P2PServerAddress, _options.ServerPeerId, _options.ServerSeed);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(_options.TargetMasterPeerId))
+                    {
+                        peerClient.RemoteAddress = P2PAddressHelper.ToMultiaddr($"{_options.MasterHost}:{_options.MasterPort}", _options.TargetMasterPeerId);
+                    }
+                    else
+                    {
+                        peerClient.RemoteAddress = P2PAddressHelper.ToMultiaddr($"{_options.MasterHost}:{_options.MasterPort}");
+                    }
+
+                    _client = peerClient;
+                }
+                else
+                {
+                    _client = new TcpClient
+                    {
+                        Host = _options.MasterHost,
+                        Port = _options.MasterPort
+                    };
+                }
 
                 // 3. 挂载 BytesRpc 插件
-                _addon = new BytesRpcTerminalAddon(_terminal, _tcpClient);
+                _addon = new BytesRpcTerminalAddon(_terminal, _client);
 
                 // 4. 注册本地服务
                 _screenService = new ScreenShareService(_options.CaptureOptions, null, _options.ShareMode, nodeName);
@@ -106,18 +145,28 @@ namespace ApeFree.DonateScreen.Slave
                 }
 
                 // 5. 监听断线与重连
-                _tcpClient.OnDisconnected += OnDisconnected;
+                _client.OnDisconnected += OnDisconnected;
 
                 // 6. 发起连接
-                var connectResult = await _tcpClient.ConnectAsync();
+                var connectResult = await _client.ConnectAsync(new ConnectArgument { Timeout = 10000 });
                 if (!connectResult.IsSuccess)
                 {
                     ScheduleReconnect();
                     return false;
                 }
 
+                // 若在 P2P 模式下，向服务端发送会话配对握手报文
+                if (_options.UseP2P && _client is PeerClient p2p)
+                {
+                    var handshake = P2PRelayManager.CreateHandshakePacket("Slave", p2p.LocalPeerId, _options.TargetMasterPeerId);
+                    p2p.Send(handshake);
+                }
+
                 // 7. 启动屏幕抓取推流循环
                 _screenService.Start();
+
+                // 8. 通知 Master 上线注册元数据（异步带重试）
+                NotifyMasterOnlineWithRetry();
 
                 ConnectionStatusChanged?.Invoke(this, true);
                 return true;
@@ -129,31 +178,41 @@ namespace ApeFree.DonateScreen.Slave
             }
         }
 
-        private async Task NotifyMasterOnlineAsync()
+        private void NotifyMasterOnlineWithRetry()
         {
-            try
+            _ = Task.Run(async () =>
             {
-                if (_addon == null || _tcpClient == null || !_tcpClient.IsConnected) return;
-                var masterService = _addon.QueryService<IMasterScreenService>(nameof(MasterScreenService), _tcpClient);
-                if (masterService != null)
+                await Task.Delay(200).ConfigureAwait(false);
+                for (int i = 0; i < 10; i++)
                 {
-                    var topo = _screenService?.ScreenTopology;
-                    masterService.RegisterSlaveNode(new SlaveNodeRegistrationDto
+                    if (_isDisposed || _client == null || !_client.IsConnected) break;
+                    try
                     {
-                        SlaveId = _options.NodeName,
-                        MachineName = Environment.MachineName,
-                        OsVersion = Environment.OSVersion.ToString(),
-                        ShareMode = _options.ShareMode,
-                        DisplayWidth = topo?.Width ?? 1920,
-                        DisplayHeight = topo?.Height ?? 1080,
-                        Note = _options.NodeName
-                    });
+                        var masterService = _addon?.QueryService<IMasterScreenService>(nameof(MasterScreenService), _client);
+                        if (masterService != null)
+                        {
+                            var topo = _screenService?.ScreenTopology;
+                            masterService.RegisterSlaveNode(new SlaveNodeRegistrationDto
+                            {
+                                SlaveId = _options.NodeName,
+                                MachineName = Environment.MachineName,
+                                OsVersion = Environment.OSVersion.ToString(),
+                                ShareMode = _options.ShareMode,
+                                DisplayWidth = topo?.Width ?? 1920,
+                                DisplayHeight = topo?.Height ?? 1080,
+                                Note = _options.NodeName,
+                                TargetMasterPeerId = _options.TargetMasterPeerId,
+                                LocalPeerId = LocalPeerId
+                            });
+                            break;
+                        }
+                    }
+                    catch
+                    {
+                        await Task.Delay(400).ConfigureAwait(false);
+                    }
                 }
-            }
-            catch
-            {
-                // 若 Master 尚未注册协同服务，不影响主要屏幕推流
-            }
+            });
         }
 
         private void OnDisconnected(object? sender, EventArgs e)
@@ -199,12 +258,12 @@ namespace ApeFree.DonateScreen.Slave
                 _screenService?.Stop();
                 _inputService?.ResetInputState();
 
-                if (_tcpClient != null)
+                if (_client != null)
                 {
-                    _tcpClient.OnDisconnected -= OnDisconnected;
-                    _tcpClient.Disconnect();
-                    _tcpClient.Dispose();
-                    _tcpClient = null;
+                    _client.OnDisconnected -= OnDisconnected;
+                    _client.Disconnect();
+                    _client.Dispose();
+                    _client = null;
                 }
 
                 _addon?.Dispose();

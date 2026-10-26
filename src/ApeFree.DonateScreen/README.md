@@ -9,13 +9,14 @@
 ## 项目简介
 
 `ApeFree.DonateScreen` 是 ApeFree 系列旗下基于点对点主动分享理念打造的高性能远程屏幕分享与控制核心契约类库。
-其技术方案完全延续 `ApeFree.DonateDisk` 的直连设计，通过内网受控端主动连接主控端，结合 DXGI 显存帧截取、FFmpeg H.264 超低延迟（zerolatency）硬/软编解码、TurboJPEG 差量分块降级压缩、单调配额流控机制以及 Win32 硬件级输入模拟，为远程桌面应用提供开箱即用、低延迟、零 GC 抖动的核心基础设施。
+其技术方案承袭自开源项目 `ApeFree.DonateDisk`，全面支持**标准 TCP 直连**与 **P2P 去中心化中继 (Libp2p Circuit Relay)** 双重网络架构，结合 DXGI 显存帧截取、FFmpeg H.264 超低延迟（zerolatency）硬/软编解码、TurboJPEG 差量分块降级压缩、单调配额流控机制以及 Win32 硬件级输入模拟，为远程桌面应用提供开箱即用、低延迟、零 GC 抖动的核心基础设施。
 
 ---
 
 ## 🌟 核心特性
 
-- **点对点全双工反向 RPC 代理**：基于 `ApeFree.ApeRpc.BytesIO` 与 `STTech.BytesIO`，受控端主动连出，主控端透明反向调用，单 TCP 端口穿透，免中心服务器。
+- **P2P 去中心化中继与精准配对**：基于 `STTech.BytesIO.P2P` (Libp2p) 实现跨 NAT / 复杂防火墙内网穿透；支持基于目标 Master PeerId 的精准会话定向路由与隔离，杜绝多设备混流与广播损耗。
+- **点对点全双工反向 RPC 代理**：基于 `ApeFree.ApeRpc.BytesIO` 与 `STTech.BytesIO`，受控端主动连出，主控端透明反向调用，单端口全双工双向交互。
 - **FFmpeg H.264 超低延迟流式编解码**：内置 FFmpeg libavcodec (`x264` + `zerolatency` + `ultrafast`)，单帧压缩比高达 99.8%，1080P P 帧仅数十字节，端到端编码延迟 < 12ms。
 - **单调配额流控机制 (Flow Control)**：主控端驱动配额步进，丢弃陈旧队列并按需触发 IDR 关键帧，彻底杜绝画面积压卡顿与后台无谓推流。
 - **GPU 显存级屏幕抓取**：基于 DXGI Desktop Duplication API，单帧抓取耗时 < 2ms，支持 60 FPS 稳定传输，内置 GDI 容灾降级机制。
@@ -35,81 +36,86 @@ dotnet add package ApeFree.DonateScreen
 
 ## 🚀 快速上手
 
-### 1. 受控端 (Slave) 开启屏幕与键鼠分享
+### 1. P2P 模式受控端 (Slave) 开启屏幕与控制分享
 
 ```csharp
 using ApeFree.DonateScreen.Contracts;
 using ApeFree.DonateScreen.Slave;
 
-// 1. 配置 Slave 节点参数（默认使用 FFmpeg H.264 编码与单调配额流控）
+// 1. 配置 Slave 节点使用 P2P 模式连入指定公网 Relay 并寻址目标 Master
 var options = new ScreenSlaveOptions
 {
-    MasterHost = "192.168.1.100",
-    MasterPort = 9822,
-    ShareMode = ScreenShareMode.FullControl, // 或 ScreenShareMode.ViewOnly (仅观看)
+    UseP2P = true,
+    P2PServerAddress = "127.0.0.1:9832",               // P2P 中继服务端地址
+    TargetMasterPeerId = "12D3KooWMasterTestPeerId...",  // 目标 Master 的稳定 PeerId
+    ShareMode = ScreenShareMode.FullControl,            // 完全控制模式
     NodeName = "MyOfficePC",
     CaptureOptions = new CaptureOptionsDto { MaxFps = 30, Crf = 25, Codec = VideoCodecType.H264 }
 };
 
-// 2. 启动节点主动连接 Master
+// 2. 启动节点主动连入网络
 using var slaveNode = new ScreenSlaveNode(options);
 bool connected = await slaveNode.StartAsync();
-Console.WriteLine(connected ? "已成功连接至 Master 并开启屏幕分享" : "连接失败，正在后台自动重连...");
+Console.WriteLine(connected ? "已成功连接至 P2P 中继并与 Master 完成配对" : "连接尝试中，后台持续重连...");
 ```
 
-### 2. 主控端 (Master) 接收屏幕并实施控制
+### 2. P2P 模式主控端 (Master) 接收屏幕并实施控制
 
 ```csharp
 using ApeFree.DonateScreen.Contracts;
 using ApeFree.DonateScreen.Master;
 using ApeFree.DonateScreen.Rendering;
 
-// 1. 启动 Master 监听服务
-var masterOptions = new ScreenMasterOptions { ListenPort = 9822 };
+// 1. 启动 Master 节点连入 P2P Relay
+var masterOptions = new ScreenMasterOptions
+{
+    UseP2P = true,
+    P2PServerAddress = "127.0.0.1:9832",               // 填入中继地址（留空则为本地 P2P 监听）
+    IdentitySeed = "MyStableMasterSeed123"             // 指定身份种子保持 PeerId 跨重启不变
+};
 using var masterNode = new ScreenMasterNode(masterOptions);
 await masterNode.StartAsync();
+
+Console.WriteLine($"Master 本机 PeerId: {masterNode.LocalPeerId}");
 
 // 2. 监听 Slave 接入事件
 masterNode.SessionManager.SlaveConnected += (sender, session) =>
 {
     Console.WriteLine($"Slave 设备上线: {session.Info.MachineName} ({session.RemoteAddress})");
-    Console.WriteLine($"分享模式: {session.Info.ShareMode}, 分辨率: {session.Info.DisplayWidth}x{session.Info.DisplayHeight}");
 
-    // 监听实时屏幕帧并渲染（WriteableBitmapBlitter 自动支持 H.264 与 TurboJPEG 解码）
+    // 监听实时屏幕帧并解码渲染
     var blitter = new WriteableBitmapBlitter();
     session.FrameReceived += (s, framePacket) =>
     {
-        // 在 UI 线程通过 WriteableBitmap 局部增量渲染
         Application.Current.Dispatcher.Invoke(() => blitter.RenderPacket(framePacket));
     };
 
-    // 设置初始刷新配额以拉取画面
+    // 设置初始刷新配额拉取画面
     session.ScreenService?.SetRefreshQuota(10);
 
-    // 若具备控制权限，可直接注入键盘鼠标指令
-    if (session.CanControl && session.InputService != null)
+    // 发送鼠标移动事件
+    session.InputService?.SendMouseEvent(new MouseEventDto
     {
-        session.InputService.SendMouseEvent(new MouseEventDto
-        {
-            NormalizedX = 32768, // 屏幕中心 X (0~65535)
-            NormalizedY = 32768, // 屏幕中心 Y (0~65535)
-            Flags = MouseActionFlags.Move
-        });
-    }
+        NormalizedX = 32768, // 屏幕中心 X (0~65535)
+        NormalizedY = 32768, // 屏幕中心 Y (0~65535)
+        Flags = MouseActionFlags.Move
+    });
 };
 ```
 
----
+### 3. 快速启动独立 P2P 中继服务 (ScreenRelayServer)
 
-## 🧩 关联子工程
+```csharp
+using ApeFree.DonateScreen.P2P;
 
-| 项目名称 | 说明 |
-| :--- | :--- |
-| **`ApeFree.DonateScreen.WinSlaveDesktop`** | WPF 专用受控分享端桌面应用程序 |
-| **`ApeFree.DonateScreen.WinDesktop`** | WPF 综合主控/受控端桌面应用程序（包含多设备管理卡片与控制视窗） |
+// 在具有公网 IP 的服务器上启动 P2P 中继
+using var relayServer = new ScreenRelayServer(9832);
+await relayServer.StartAsync();
+Console.WriteLine($"P2P Relay Server 已在端口 9832 启动监听 (PeerId: {relayServer.LocalPeerId})");
+```
 
 ---
 
 ## 📄 开源许可证
 
-本项目基于 [Apache-2.0](LICENSE) 许可证开源。
+本项目基于 [Apache-2.0](LICENSE) 开源许可证发布。

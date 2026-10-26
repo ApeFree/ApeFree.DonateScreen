@@ -307,5 +307,15 @@ namespace ApeFree.DonateScreen.Contracts
         /// 备注信息或标签
         /// </summary>
         public string Note { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 目标 Master 节点的 PeerId (仅在 P2P 模式下使用)
+        /// </summary>
+        public string? TargetMasterPeerId { get; set; }
+
+        /// <summary>
+        /// Slave 节点自身的 PeerId (仅在 P2P 模式下使用)
+        /// </summary>
+        public string? LocalPeerId { get; set; }
     }
 }

@@ -1,4 +1,6 @@
 using ApeFree.DonateScreen.Contracts;
+using ApeFree.DonateScreen.P2P;
+using System.Collections.Generic;
 
 namespace ApeFree.DonateScreen.Slave
 {
@@ -8,12 +10,12 @@ namespace ApeFree.DonateScreen.Slave
     public class ScreenSlaveOptions
     {
         /// <summary>
-        /// 目标 Master 端主机地址 (IP 或域名)
+        /// 目标 Master 端主机地址 (IP 或域名，仅用于标准 TCP 模式)
         /// </summary>
         public string MasterHost { get; set; } = "127.0.0.1";
 
         /// <summary>
-        /// 目标 Master 端监听端口 (默认 9822)
+        /// 目标 Master 端监听端口 (默认 9822，仅用于标准 TCP 模式)
         /// </summary>
         public int MasterPort { get; set; } = 9822;
 
@@ -41,5 +43,60 @@ namespace ApeFree.DonateScreen.Slave
         /// 重连间隔时间 (毫秒，默认 3000ms)
         /// </summary>
         public int ReconnectIntervalMs { get; set; } = 3000;
+
+        /// <summary>
+        /// 是否启用 P2P (Libp2p) 去中心化中继模式
+        /// </summary>
+        public bool UseP2P { get; set; }
+
+        /// <summary>
+        /// P2P 引导与中继服务端地址（例如 127.0.0.1:9832 或公共中继）
+        /// </summary>
+        public string? P2PServerAddress { get; set; }
+
+        /// <summary>
+        /// 目标 Master 节点的 PeerId (P2P 模式下必须提供以完成精准寻址与会话配对)
+        /// </summary>
+        public string? TargetMasterPeerId { get; set; }
+
+        /// <summary>
+        /// 本地节点的身份私钥种子（可选）
+        /// </summary>
+        public string? IdentitySeed { get; set; }
+
+        /// <summary>
+        /// P2P 中继服务端的 PeerId（可选）
+        /// </summary>
+        public string? ServerPeerId { get; set; }
+
+        /// <summary>
+        /// P2P 中继服务端的凭据种子（可选）
+        /// </summary>
+        public string? ServerSeed { get; set; }
+
+        /// <summary>
+        /// 是否启用 Relay 协议
+        /// </summary>
+        public bool EnableRelay { get; set; } = false;
+
+        /// <summary>
+        /// 是否启用 DHT 节点发现
+        /// </summary>
+        public bool EnableDht { get; set; } = true;
+
+        /// <summary>
+        /// 是否启用 mDNS 局域网节点发现
+        /// </summary>
+        public bool EnableMdns { get; set; } = true;
+
+        /// <summary>
+        /// 是否启用 QUIC 传输
+        /// </summary>
+        public bool EnableQuic { get; set; } = false;
+
+        /// <summary>
+        /// 引导节点 Multiaddr 列表
+        /// </summary>
+        public List<string> BootstrapPeers { get; set; } = new List<string>();
     }
 }

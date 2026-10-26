@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <PackageReference Include="ApeFree.ApeRpc.BytesIO" Version="0.0.3-alpha61009" />
+    <PackageReference Include="STTech.BytesIO.P2P" Version="3.3.0.1-alpha61010" />
     <PackageReference Include="ScreenCapture.NET" Version="3.0.0" />
     <PackageReference Include="ScreenCapture.NET.DX11" Version="3.0.0" />
     <PackageReference Include="TurboJpegWrapper" Version="1.5.2" />
