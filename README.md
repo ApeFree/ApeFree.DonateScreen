@@ -10,8 +10,9 @@
 
 `ApeFree.DonateScreen` 是一个面向 Windows 平台的高性能**主动捐赠式远程屏幕分享与控制系统**。
 其设计哲学完全承袭自开源项目 `ApeFree.DonateDisk`：
-- **突破传统远程桌面困境**：受控端（Slave）主动发起 TCP 连接至指定主控端（Master），无需公网 IP、无需配置内网穿透与路由器端口映射，彻底摆脱第三方中心化云服务器的限速与隐私顾虑；
-- **ApeRpc 全双工反向透明代理**：通过 `ApeFree.ApeRpc.BytesIO`，在底层直连 TCP 信道建立后，主控端透明获取受控端暴露的业务接口代理，实现毫秒级反向调用与事件推送；
+- **突破传统远程桌面困境**：支持**标准 TCP 直连**与 **P2P 去中心化中继 (Libp2p Circuit Relay)** 双重网络架构。受控端（Slave）主动发起连接至主控端（Master）或 P2P 中继节点，双方均无需公网 IP、无需配置路由器端口映射，彻底摆脱第三方中心化云服务器的限速与隐私顾虑；
+- **P2P 精准寻址与安全会话配对**：Master 端展示自身稳定 PeerId，Slave 指定目标 Master PeerId 发起配对，中继端精准建立专用点对点通道定向互传，无广播开销且杜绝多设备串扰；
+- **ApeRpc 全双工反向透明代理**：通过 `ApeFree.ApeRpc.BytesIO` 与 `STTech.BytesIO`，在底层直连或 P2P 信道建立后，主控端透明获取受控端暴露的业务接口代理，实现毫秒级反向调用与事件推送；
 - **DXGI GPU 显存级屏幕捕获**：基于 `ScreenCapture.NET` (DXGI Desktop Duplication API)，直接访问 GPU 显存表面，帧捕获延迟 < 2ms，画面静止时零开销跳过；
 - **FFmpeg H.264 超低延迟流式编解码**：进程内原生集成 FFmpeg libavcodec (`x264` + `zerolatency` + `ultrafast`)，单帧压缩比达 99.8%，1080P P 帧仅数十字节，端到端编码耗时仅 10ms 级；
 - **单调配额流控机制 (Flow Control)**：主控端驱动配额步进，丢弃陈旧队列并按需触发 IDR 关键帧，彻底杜绝画面积压延迟；
@@ -24,54 +25,67 @@
 
 | 工程目录 / 库名称 | 类型 | 职责说明 |
 | :--- | :--- | :--- |
-| **`ApeFree.DonateScreen`** | 核心类库 | 跨端通信契约 (`IScreenShareService`, `IInputControlService`)、DXGI 捕获管道、FFmpeg H.264 / TurboJPEG 编解码、Win32 `SendInput` 键鼠模拟与多 Slave 会话管理器 (`SlaveSessionManager`) |
-| **`ApeFree.DonateScreen.WinSlaveDesktop`** | WPF 桌面应用 | 受控端桌面程序，仅提供将本地屏幕与键鼠控制权分享给 Master，支持【完全控制】与【仅观看屏幕】模式切换、画质与 CRF 调节及紧急切断 |
-| **`ApeFree.DonateScreen.WinDesktop`** | WPF 桌面应用 | 综合主控/受控桌面程序，引用 `WinSlaveDesktop` 复用受控功能；内置 TCP 监听服务，多 Slave 设备列表管理及高性能远程交互控制视窗 |
-| **`ApeFree.DonateScreen.Tests`** | 测试工程 | FFmpeg H.264 编解码往返验证、DXGI 容灾降级测试、全双工 RPC 远程控制与仅观看权限阻断端到端测试 |
+| **`ApeFree.DonateScreen`** | 核心类库 | 跨端通信契约 (`IScreenShareService`, `IInputControlService`)、P2P 协议与中继宿主 (`ScreenRelayServer`, `P2PRelayManager`)、DXGI 捕获管道、FFmpeg H.264 / TurboJPEG 编解码、Win32 `SendInput` 键鼠模拟与多 Slave 会话管理器 (`SlaveSessionManager`) |
+| **`ApeFree.DonateScreen.WinSlaveDesktop`** | WPF 桌面应用 | 受控端桌面程序，支持 TCP 直连与 P2P 中继模式切换；输入目标 Master PeerId 即可一键建立跨 NAT 屏幕与键鼠分享；提供【完全控制】与【仅观看屏幕】模式切换、画质调节及紧急切断 |
+| **`ApeFree.DonateScreen.WinDesktop`** | WPF 桌面应用 | 综合主控/受控桌面程序，包含三个核心功能标签页：<br>1. **远程桌面管理 (Master)**：支持标准 TCP 监听或 P2P 中继接入，展示本机稳定 PeerId，管理接入的设备卡片并打开低延迟远程控制视窗；<br>2. **本机受控分享 (Slave)**：嵌入受控面板；<br>3. **P2P 中继服务 (Relay Server)**：内置独立公网/局域网 P2P 引导与中继服务管理面板 |
+| **`ApeFree.DonateScreen.Tests`** | 测试工程 | 包含 P2P 工具函数测试、会话精准配对隔离测试、FFmpeg H.264 往返测试及 P2P 屏幕推流端到端测试 |
 
 ---
 
-## 🚀 核心架构与交互模型
+## 🚀 核心架构拓扑
 
+### 1. P2P 去中心化中继模式 (双方均位于 NAT 内部，跨公网首选)
 ```
-┌────────────────────────────────────────────────────────┐
-│             Slave 计算机 (受控端 / 发起连接)           │
-│  DXGI (GPU 显存) ──► FFmpeg H.264 (超低延迟编码)       │
-│                                           │            │
-│  Win32 SendInput ◄── IInputControlService ◄ (H.264 NAL)│
-│  (模拟键盘鼠标)      (在完全控制模式下暴露) │            │
-│                                           ▼            │
-│                              ApeRpc.BytesIO (TcpClient)│
-└───────────────────────────────────────────┬────────────┘
-                                            │ TCP 直连全双工信道 (单端口)
-┌───────────────────────────────────────────▼────────────┐
-│             Master 计算机 (主控端 / 监听服务)          │
-│                              ApeRpc.BytesIO (TcpServer)│
-│                                           │            │
-│  WPF WriteableBitmap ◄── FFmpeg H.264 解码 ┤            │
-│  WPF RemoteDisplayBox (捕获用户键盘鼠标) ─┘            │
-└────────────────────────────────────────────────────────┘
+                    ┌───────────────────────────────────┐
+                    │     公网 / 本机 P2P Relay Server    │
+                    │      (STTech.BytesIO.P2P)         │
+                    │  [Target PeerId Session Pairing]  │
+                    └────────▲─────────────────▲────────┘
+          主动连接 (Multiaddr)│                 │主动连接 (Multiaddr + TargetPeerId)
+                             │                 │
+ ┌───────────────────────────┴─┐             ┌─┴───────────────────────────┐
+ │   Master 端 (主控端 / NAT)  │             │    Slave 端 (受控端 / NAT)  │
+ │  展示自身稳定 PeerId        │ <─────────> │   指定目标 Master PeerId    │
+ │  WPF 远程控制 & 画面解码    │   ApeRpc    │   DXGI 抓屏 + H.264 增量推流│
+ └─────────────────────────────┘             └─────────────────────────────┘
+```
+
+### 2. 标准 TCP 直连模式 (局域网 / 单向公网直连)
+```
+Master (TcpServer 监听 9822) <──────[TCP 直连]────── Slave (TcpClient 拨号)
+       │                                                    │
+WPF 远程画面显示与输入控制                             DXGI 抓屏 + H.264 编码
 ```
 
 ---
 
 ## 💻 快速上手指南
 
-### 1. 受控端 (WinSlaveDesktop)
-1. 启动 `ApeFree.DonateScreen.WinSlaveDesktop.exe`；
-2. 输入主控端机器的 IP 地址与端口号（默认端口 `9822`）；
-3. 选择分享权限模式：
-   - **完全控制**：Master 可实时观看屏幕并操作键盘鼠标；
-   - **仅观看屏幕**：Master 仅能观看屏幕，拒绝一切键盘鼠标控制指令；
-4. 选择编码方案（默认推荐 **FFmpeg H.264**）与 CRF 质量；
-5. 点击【开始分享 (Connect)】即可连入 Master。受控机随时可点击【紧急切断控制】收回本地物理控制权。
+### 方案 A：P2P 中继穿透模式 (跨公网/复杂 NAT 穿透首选，推荐)
 
-### 2. 主控端 (WinDesktop)
-1. 启动 `ApeFree.DonateScreen.WinDesktop.exe`；
-2. 在“远程桌面管理 (Master)”标签页设置监听端口（默认 `9822`），点击【启动监听 (Listen)】；
-3. 当远端 Slave 接入后，设备列表将实时出现其卡片（包含机器名、IP、分辨率、分享模式标签）；
-4. 点击卡片上的【开始控制】按钮，即可打开独立的远程桌面交互视窗，畅享低延迟实时控制体验；
-5. 在“本机受控分享 (Slave)”标签页，本机也可同时作为受控端分享给其他主机。
+1. **启动中继服务 (Relay Server)**：
+   - 可以在具有公网 IP 的服务器上部署，或者在任意一台 `WinDesktop` 的【P2P 中继服务 (Relay Server)】标签页点击【启动中继服务】（默认端口 `9832`）。
+2. **主控端 (WinDesktop)**：
+   - 进入【远程桌面管理 (Master)】标签页；
+   - 网络模式选择【P2P 中继穿透模式】；
+   - 填写中继服务端地址（如 `127.0.0.1:9832` 或公网中继 IP:端口）；
+   - 点击【复制 PeerId】将本机展示的稳定 PeerId 复制发送给受控端；
+   - 点击【启动 P2P 服务】开始等待接入。
+3. **受控端 (WinSlaveDesktop)**：
+   - 启动受控端程序，网络模式选择【P2P 中继穿透模式】；
+   - 填入相同的 P2P 中继服务端地址；
+   - 在【目标 Master PeerId】输入框中粘贴主控端的 PeerId；
+   - 选择分享权限（完全控制或仅观看屏幕），点击【开始分享 (Connect)】；
+   - 连接成功后，主控端界面将立即弹出该设备卡片，点击【开始控制】即可畅享毫秒级远程控制！
+
+---
+
+### 方案 B：标准 TCP 直连模式 (局域网 / 主控端有公网 IP)
+
+1. **主控端 (WinDesktop)**：
+   - 网络模式切换为【标准 TCP 监听模式】，设置端口（默认 `9822`），点击【启动监听】；
+2. **受控端 (WinSlaveDesktop)**：
+   - 网络模式切换为【标准 TCP 直连模式】，输入主控端 IP 地址与端口，点击【开始分享】。
 
 ---
 
