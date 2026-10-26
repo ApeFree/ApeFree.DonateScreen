@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 namespace ApeFree.DonateScreen.Tests
 {
     [TestClass]
+    [DoNotParallelize]
     public class EndToEndRpcScreenTests
     {
         [TestMethod]
