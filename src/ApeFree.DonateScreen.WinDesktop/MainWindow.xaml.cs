@@ -16,6 +16,21 @@ namespace ApeFree.DonateScreen.WinDesktop
             await ViewModel.ToggleListenAsync();
         }
 
+        private void OnCopyPeerIdClicked(object sender, RoutedEventArgs e)
+        {
+            ViewModel.CopyMasterPeerId();
+        }
+
+        private async void OnToggleRelayServerClicked(object sender, RoutedEventArgs e)
+        {
+            await ViewModel.RelayViewModel.ToggleServerAsync();
+        }
+
+        private void OnClearRelayLogsClicked(object sender, RoutedEventArgs e)
+        {
+            ViewModel.RelayViewModel.ClearLogs();
+        }
+
         private void OnControlSlaveClicked(object sender, RoutedEventArgs e)
         {
             if (sender is Button btn && btn.DataContext is SlaveSession session)

@@ -13,6 +13,12 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
         private ScreenSlaveNode? _slaveNode;
         private DispatcherTimer? _timer;
 
+        private bool _isP2PMode = true;
+        private bool _isTcpMode = false;
+        private string _p2pServerAddress = "127.0.0.1:9832";
+        private string _targetMasterPeerId = string.Empty;
+        private string _identitySeed = string.Empty;
+
         private string _masterHost = "127.0.0.1";
         private int _masterPort = 9822;
         private string _nodeName = Environment.MachineName;
@@ -31,6 +37,48 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
         private string _engineName = "就绪";
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        public bool IsP2PMode
+        {
+            get => _isP2PMode;
+            set
+            {
+                _isP2PMode = value;
+                _isTcpMode = !value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsTcpMode));
+            }
+        }
+
+        public bool IsTcpMode
+        {
+            get => _isTcpMode;
+            set
+            {
+                _isTcpMode = value;
+                _isP2PMode = !value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsP2PMode));
+            }
+        }
+
+        public string P2PServerAddress
+        {
+            get => _p2pServerAddress;
+            set { _p2pServerAddress = value; OnPropertyChanged(); }
+        }
+
+        public string TargetMasterPeerId
+        {
+            get => _targetMasterPeerId;
+            set { _targetMasterPeerId = value; OnPropertyChanged(); }
+        }
+
+        public string IdentitySeed
+        {
+            get => _identitySeed;
+            set { _identitySeed = value; OnPropertyChanged(); }
+        }
 
         public string MasterHost
         {
@@ -215,10 +263,20 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
 
         public async Task StartAsync()
         {
-            StatusText = "正在连接 Master...";
+            if (IsP2PMode && string.IsNullOrWhiteSpace(TargetMasterPeerId))
+            {
+                StatusText = "错误：P2P 模式必须输入目标 Master PeerId";
+                return;
+            }
+
+            StatusText = IsP2PMode ? "正在通过 P2P 连接 Master..." : "正在连接 Master...";
 
             var options = new ScreenSlaveOptions
             {
+                UseP2P = IsP2PMode,
+                P2PServerAddress = IsP2PMode ? P2PServerAddress.Trim() : null,
+                TargetMasterPeerId = IsP2PMode ? TargetMasterPeerId.Trim() : null,
+                IdentitySeed = !string.IsNullOrWhiteSpace(IdentitySeed) ? IdentitySeed.Trim() : null,
                 MasterHost = MasterHost.Trim(),
                 MasterPort = MasterPort,
                 NodeName = NodeName.Trim(),
@@ -248,12 +306,14 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             IsConnected = success;
             if (success)
             {
-                StatusText = $"已成功连接至 {MasterHost}:{MasterPort}";
+                StatusText = IsP2PMode
+                    ? $"已通过 P2P 成功接入 Master ({TargetMasterPeerId[..Math.Min(8, TargetMasterPeerId.Length)]}...)"
+                    : $"已成功连接至 {MasterHost}:{MasterPort}";
                 EngineName = _slaveNode.ScreenService?.EngineName ?? "FFmpeg H.264 / DirectX";
             }
             else
             {
-                StatusText = "连接失败，正在后台持续重连...";
+                StatusText = "连接建立中，后台持续尝试中...";
             }
         }
 
