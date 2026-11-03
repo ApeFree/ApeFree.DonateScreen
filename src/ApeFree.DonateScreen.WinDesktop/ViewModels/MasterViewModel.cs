@@ -1,3 +1,4 @@
+using ApeFree.DonateScreen.Contracts;
 using ApeFree.DonateScreen.Master;
 using ApeFree.DonateScreen.WinDesktop.Views;
 using System;
@@ -16,12 +17,27 @@ namespace ApeFree.DonateScreen.WinDesktop.ViewModels
         private bool _isListening = false;
         private string _statusText = "服务已停止";
 
+        private string _targetHost = "127.0.0.1";
+        private int _targetPort = 9822;
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         public int ListenPort
         {
             get => _listenPort;
             set { _listenPort = value; OnPropertyChanged(); }
+        }
+
+        public string TargetHost
+        {
+            get => _targetHost;
+            set { _targetHost = value; OnPropertyChanged(); }
+        }
+
+        public int TargetPort
+        {
+            get => _targetPort;
+            set { _targetPort = value; OnPropertyChanged(); }
         }
 
         public bool IsListening
@@ -70,64 +86,91 @@ namespace ApeFree.DonateScreen.WinDesktop.ViewModels
             }
         }
 
+        private void EnsureMasterNodeInitialized()
+        {
+            if (_masterNode == null)
+            {
+                var options = new ScreenMasterOptions
+                {
+                    TransportMode = NetworkTransportMode.Listen,
+                    ListenHost = "0.0.0.0",
+                    ListenPort = ListenPort,
+                    NodeName = $"Master-{Environment.MachineName}"
+                };
+
+                _masterNode = new ScreenMasterNode(options);
+
+                // 监听 Slave 设备动态变动 (采用非阻塞 InvokeAsync，彻底避免跨线程死锁)
+                _masterNode.SessionManager.SlaveConnected += (s, session) =>
+                {
+                    Application.Current?.Dispatcher.InvokeAsync(() =>
+                    {
+                        if (!SlaveDevices.Contains(session))
+                        {
+                            SlaveDevices.Add(session);
+                            NotifyDevicesStateChanged();
+                        }
+                    });
+                };
+
+                _masterNode.SessionManager.SlaveDisconnected += (s, session) =>
+                {
+                    Application.Current?.Dispatcher.InvokeAsync(() =>
+                    {
+                        SlaveDevices.Remove(session);
+                        NotifyDevicesStateChanged();
+                    });
+                };
+
+                _masterNode.SessionManager.SlaveUpdated += (s, session) =>
+                {
+                    Application.Current?.Dispatcher.InvokeAsync(() =>
+                    {
+                        int index = SlaveDevices.IndexOf(session);
+                        if (index >= 0)
+                        {
+                            SlaveDevices[index] = session;
+                        }
+                        NotifyDevicesStateChanged();
+                    });
+                };
+            }
+        }
+
         public async Task StartAsync()
         {
             StatusText = $"正在启动端口 {ListenPort} 监听...";
+            EnsureMasterNodeInitialized();
 
-            var options = new ScreenMasterOptions
-            {
-                ListenHost = "0.0.0.0",
-                ListenPort = ListenPort,
-                NodeName = $"Master-{Environment.MachineName}"
-            };
-
-            _masterNode = new ScreenMasterNode(options);
-
-            // 监听 Slave 设备动态变动 (采用非阻塞 InvokeAsync，彻底避免主从跨线程死锁)
-            _masterNode.SessionManager.SlaveConnected += (s, session) =>
-            {
-                Application.Current?.Dispatcher.InvokeAsync(() =>
-                {
-                    if (!SlaveDevices.Contains(session))
-                    {
-                        SlaveDevices.Add(session);
-                        NotifyDevicesStateChanged();
-                    }
-                });
-            };
-
-            _masterNode.SessionManager.SlaveDisconnected += (s, session) =>
-            {
-                Application.Current?.Dispatcher.InvokeAsync(() =>
-                {
-                    SlaveDevices.Remove(session);
-                    NotifyDevicesStateChanged();
-                });
-            };
-
-            _masterNode.SessionManager.SlaveUpdated += (s, session) =>
-            {
-                Application.Current?.Dispatcher.InvokeAsync(() =>
-                {
-                    int index = SlaveDevices.IndexOf(session);
-                    if (index >= 0)
-                    {
-                        SlaveDevices[index] = session;
-                    }
-                    NotifyDevicesStateChanged();
-                });
-            };
-
-            bool started = await _masterNode.StartAsync();
+            bool started = await _masterNode!.StartAsync();
             IsListening = started;
             StatusText = started
                 ? $"正在监听 0.0.0.0:{ListenPort} (等待 Slave 接入...)"
                 : "启动监听失败，请检查端口是否被占用";
         }
 
+        /// <summary>
+        /// 主动向指定的目标 Slave 节点发起连接并加入控制列表
+        /// </summary>
+        public async Task ConnectToSlaveAsync()
+        {
+            EnsureMasterNodeInitialized();
+            StatusText = $"正在连接受控端 {TargetHost}:{TargetPort}...";
+
+            var session = await _masterNode!.ConnectToSlaveAsync(TargetHost.Trim(), TargetPort);
+            if (session != null)
+            {
+                StatusText = $"成功直连受控端 {TargetHost}:{TargetPort}";
+            }
+            else
+            {
+                StatusText = $"连接 {TargetHost}:{TargetPort} 失败，已加入后台自动重试队列";
+            }
+        }
+
         public async Task StopAsync()
         {
-            StatusText = "正在停止监听服务...";
+            StatusText = "正在停止服务...";
             if (_masterNode != null)
             {
                 await _masterNode.StopAsync();

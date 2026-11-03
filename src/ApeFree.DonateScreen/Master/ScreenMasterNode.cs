@@ -5,20 +5,24 @@ using ApeFree.DonateScreen.Slave;
 using STTech.BytesIO.Core;
 using STTech.BytesIO.Tcp;
 using System;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 
 namespace ApeFree.DonateScreen.Master
 {
     /// <summary>
-    /// Master 主控端服务监听节点。
-    /// 负责开启 TCP 监听、管理连入的 Slave 客户端并提供动态服务代理。
+    /// Master 主控端服务监听与控制节点。
+    /// 负责开启 TCP 监听等待受控端连入（反向模式），或主动向指定的受控端发起 TCP 连接（正向模式），
+    /// 管理连入的 Slave 客户端并提供动态服务代理。
     /// </summary>
     public class ScreenMasterNode : IDisposable
     {
         private readonly ScreenMasterOptions _options;
         private readonly object _lock = new();
+        private readonly ConcurrentDictionary<string, TcpClient> _outboundClients = new();
         private RpcTerminal? _terminal;
         private TcpServer? _tcpServer;
+        private TcpClient? _tcpClient;
         private BytesRpcTerminalAddon? _addon;
         private MasterScreenService? _masterService;
         private readonly SlaveSessionManager _sessionManager = new();
@@ -30,9 +34,9 @@ namespace ApeFree.DonateScreen.Master
         public SlaveSessionManager SessionManager => _sessionManager;
 
         /// <summary>
-        /// 是否正在运行监听
+        /// 是否正在运行（Listen 模式下为监听状态，Connect 模式下为客户端连接状态）
         /// </summary>
-        public bool IsRunning => _tcpServer != null && _tcpServer.IsListening;
+        public bool IsRunning => (_tcpServer != null && _tcpServer.IsListening) || (_tcpClient != null && _tcpClient.IsConnected);
 
         /// <summary>
         /// 配置参数
@@ -45,7 +49,7 @@ namespace ApeFree.DonateScreen.Master
         }
 
         /// <summary>
-        /// 启动 TCP 服务端监听
+        /// 启动 Master 节点（按配置选择开放本地监听或主动直连目标 Slave）
         /// </summary>
         public async Task<bool> StartAsync()
         {
@@ -55,24 +59,38 @@ namespace ApeFree.DonateScreen.Master
 
                 // 1. 初始化终端
                 _terminal = new RpcTerminal(new TerminalInfo { Name = _options.NodeName });
+                _addon = new BytesRpcTerminalAddon(_terminal);
 
-                // 2. 创建 TcpServer
+                // 2. 注册协同服务
+                _masterService = new MasterScreenService();
+                _masterService.SlaveRegistered += OnSlaveReportedRegistration;
+                _terminal.RegisterService(_masterService);
+            }
+
+            if (_options.TransportMode == NetworkTransportMode.Connect)
+            {
+                return await StartConnectAsync();
+            }
+            else
+            {
+                return await StartListeningAsync();
+            }
+        }
+
+        #region 服务端监听 (Listen 模式)
+
+        private async Task<bool> StartListeningAsync()
+        {
+            lock (_lock)
+            {
                 _tcpServer = new TcpServer
                 {
                     Host = _options.ListenHost,
                     Port = _options.ListenPort
                 };
 
-                // 3. 挂载 BytesRpc 插件并绑定服务端监听器
-                _addon = new BytesRpcTerminalAddon(_terminal);
-                _addon.BindServer(_tcpServer);
+                _addon!.BindServer(_tcpServer);
 
-                // 4. 注册协同服务
-                _masterService = new MasterScreenService();
-                _masterService.SlaveRegistered += OnSlaveReportedRegistration;
-                _terminal.RegisterService(_masterService);
-
-                // 5. 监听客户端上下线
                 _tcpServer.ClientConnected += (s, e) => HandleClientConnected(e.Client);
                 _tcpServer.ClientDisconnected += (s, e) => HandleClientDisconnected(e.Client);
             }
@@ -80,6 +98,87 @@ namespace ApeFree.DonateScreen.Master
             await _tcpServer.StartAsync();
             return true;
         }
+
+        #endregion
+
+        #region 主动直连 (Connect 模式)
+
+        private async Task<bool> StartConnectAsync()
+        {
+            _tcpClient = new TcpClient
+            {
+                Host = _options.TargetHost,
+                Port = _options.TargetPort
+            };
+
+            _addon!.BindClient(_tcpClient);
+
+            if (_options.AutoReconnect)
+            {
+                _tcpClient.UseAutoReconnect(_options.ReconnectIntervalMs, 0);
+            }
+
+            _tcpClient.OnConnectedSuccessfully += (s, e) => HandleClientConnected(_tcpClient);
+            _tcpClient.OnDisconnected += (s, e) => HandleClientDisconnected(_tcpClient);
+
+            var connResult = await _tcpClient.ConnectAsync();
+            return connResult.IsSuccess;
+        }
+
+        /// <summary>
+        /// 主动向指定的目标 Slave 节点发起直连，并加入管理列表
+        /// </summary>
+        public async Task<SlaveSession?> ConnectToSlaveAsync(string host, int port)
+        {
+            if (_terminal == null || _addon == null)
+            {
+                lock (_lock)
+                {
+                    if (_terminal == null || _addon == null)
+                    {
+                        _terminal = new RpcTerminal(new TerminalInfo { Name = _options.NodeName });
+                        _addon = new BytesRpcTerminalAddon(_terminal);
+
+                        if (_masterService == null)
+                        {
+                            _masterService = new MasterScreenService();
+                            _masterService.SlaveRegistered += OnSlaveReportedRegistration;
+                            _terminal.RegisterService(_masterService);
+                        }
+                    }
+                }
+            }
+
+            var client = new TcpClient
+            {
+                Host = host,
+                Port = port
+            };
+
+            _addon.BindClient(client);
+
+            if (_options.AutoReconnect)
+            {
+                client.UseAutoReconnect(_options.ReconnectIntervalMs, 0);
+            }
+
+            string clientKey = $"{host}:{port}";
+            _outboundClients[clientKey] = client;
+
+            client.OnConnectedSuccessfully += (s, e) => HandleClientConnected(client);
+            client.OnDisconnected += (s, e) => HandleClientDisconnected(client);
+
+            var result = await client.ConnectAsync();
+            if (result.IsSuccess)
+            {
+                string sessionId = client.GetHashCode().ToString();
+                return _sessionManager.GetSession(sessionId);
+            }
+
+            return null;
+        }
+
+        #endregion
 
         private void HandleClientConnected(BytesClient client)
         {
@@ -186,11 +285,13 @@ namespace ApeFree.DonateScreen.Master
         }
 
         /// <summary>
-        /// 异步停止服务监听并释放连接
+        /// 异步停止服务监听与所有连接并释放资源
         /// </summary>
         public async Task StopAsync()
         {
             TcpServer? serverToClose = null;
+            TcpClient? clientToClose = null;
+
             lock (_lock)
             {
                 if (_tcpServer != null)
@@ -198,6 +299,23 @@ namespace ApeFree.DonateScreen.Master
                     serverToClose = _tcpServer;
                     _tcpServer = null;
                 }
+
+                if (_tcpClient != null)
+                {
+                    clientToClose = _tcpClient;
+                    _tcpClient = null;
+                }
+
+                foreach (var kvp in _outboundClients)
+                {
+                    try
+                    {
+                        kvp.Value.Disconnect();
+                        kvp.Value.Dispose();
+                    }
+                    catch { }
+                }
+                _outboundClients.Clear();
 
                 if (_masterService != null)
                 {
@@ -233,6 +351,16 @@ namespace ApeFree.DonateScreen.Master
                     }
                     catch { }
                 }
+            }
+
+            if (clientToClose != null)
+            {
+                try
+                {
+                    clientToClose.Disconnect();
+                    clientToClose.Dispose();
+                }
+                catch { }
             }
         }
 

@@ -15,6 +15,9 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
 
         private string _masterHost = "127.0.0.1";
         private int _masterPort = 9822;
+        private int _listenPort = 9822;
+        private bool _isConnectMode = true;
+        private bool _isListenMode = false;
         private string _nodeName = Environment.MachineName;
         private bool _isFullControl = true;
         private bool _isViewOnly = false;
@@ -32,6 +35,32 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
+        public bool IsConnectMode
+        {
+            get => _isConnectMode;
+            set
+            {
+                _isConnectMode = value;
+                _isListenMode = !value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsListenMode));
+                OnPropertyChanged(nameof(ActionButtonText));
+            }
+        }
+
+        public bool IsListenMode
+        {
+            get => _isListenMode;
+            set
+            {
+                _isListenMode = value;
+                _isConnectMode = !value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(IsConnectMode));
+                OnPropertyChanged(nameof(ActionButtonText));
+            }
+        }
+
         public string MasterHost
         {
             get => _masterHost;
@@ -42,6 +71,12 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
         {
             get => _masterPort;
             set { _masterPort = value; OnPropertyChanged(); }
+        }
+
+        public int ListenPort
+        {
+            get => _listenPort;
+            set { _listenPort = value; OnPropertyChanged(); }
         }
 
         public string NodeName
@@ -189,7 +224,9 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             set { _engineName = value; OnPropertyChanged(); }
         }
 
-        public string ActionButtonText => IsConnected ? "断开分享" : "开始分享 (Connect)";
+        public string ActionButtonText => IsConnected
+            ? "断开分享"
+            : (IsListenMode ? "启动监听 (Listen)" : "开始分享 (Connect)");
 
         public SlaveShareViewModel()
         {
@@ -215,12 +252,15 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
 
         public async Task StartAsync()
         {
-            StatusText = "正在连接 Master...";
+            StatusText = IsListenMode ? $"正在开放端口 {ListenPort} 监听..." : "正在连接 Master...";
 
             var options = new ScreenSlaveOptions
             {
+                TransportMode = IsListenMode ? NetworkTransportMode.Listen : NetworkTransportMode.Connect,
                 MasterHost = MasterHost.Trim(),
                 MasterPort = MasterPort,
+                ListenHost = "0.0.0.0",
+                ListenPort = ListenPort,
                 NodeName = NodeName.Trim(),
                 ShareMode = IsFullControl ? ScreenShareMode.FullControl : ScreenShareMode.ViewOnly,
                 CaptureOptions = new CaptureOptionsDto
@@ -240,7 +280,16 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
                 {
                     IsConnected = connected;
-                    StatusText = connected ? "已连接受控中" : "已断开连接 (重连中...)";
+                    if (IsListenMode)
+                    {
+                        StatusText = _slaveNode.ConnectedMasterCount > 0
+                            ? $"受控中 (当前接入 {_slaveNode.ConnectedMasterCount} 个 Master)"
+                            : $"监听就绪 (端口 {ListenPort}，等待 Master 连入...)";
+                    }
+                    else
+                    {
+                        StatusText = connected ? "已连接受控中" : "已断开连接 (重连中...)";
+                    }
                 });
             };
 
@@ -248,12 +297,14 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
             IsConnected = success;
             if (success)
             {
-                StatusText = $"已成功连接至 {MasterHost}:{MasterPort}";
+                StatusText = IsListenMode
+                    ? $"服务端监听已就绪 (端口 {ListenPort})，等待 Master 连入..."
+                    : $"已成功连接至 {MasterHost}:{MasterPort}";
                 EngineName = _slaveNode.ScreenService?.EngineName ?? "FFmpeg H.264 / DirectX";
             }
             else
             {
-                StatusText = "连接失败，正在后台持续重连...";
+                StatusText = IsListenMode ? "启动服务端监听失败，请检查端口是否被占用" : "连接失败，正在后台持续重连...";
             }
         }
 
@@ -318,6 +369,13 @@ namespace ApeFree.DonateScreen.WinSlaveDesktop.ViewModels
                 CurrentFps = _slaveNode.ScreenService.CurrentFps;
                 CurrentBitrate = $"{_slaveNode.ScreenService.CurrentBitrateKbps:F1} KB/s";
                 EngineName = _slaveNode.ScreenService.EngineName;
+
+                if (IsListenMode)
+                {
+                    StatusText = _slaveNode.ConnectedMasterCount > 0
+                        ? $"受控中 (当前接入 {_slaveNode.ConnectedMasterCount} 个 Master 客户端)"
+                        : $"监听端口 {ListenPort} 运行中 (等待 Master 接入...)";
+                }
             }
         }
 
