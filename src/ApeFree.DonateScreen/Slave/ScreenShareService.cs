@@ -255,6 +255,9 @@ namespace ApeFree.DonateScreen.Slave
                 return;
             }
 
+            width &= ~1;
+            height &= ~1;
+
             // 防网络积压机制：如果前一次推包仍在排队，则主动丢弃本帧但累加脏矩形范围
             if (!Monitor.TryEnter(_pushLock))
             {

@@ -5,7 +5,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:vm="clr-namespace:ApeFree.DonateScreen.WinSlaveDesktop.ViewModels"
              mc:Ignorable="d" 
-             d:DesignHeight="650" d:DesignWidth="450"
+             d:DesignHeight="680" d:DesignWidth="450"
              Background="#F3F3F3" FontFamily="Segoe UI, Microsoft YaHei">
     <UserControl.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
@@ -20,29 +20,54 @@
             <!-- 头部标题与描述 -->
             <StackPanel Margin="0,0,0,20">
                 <TextBlock Text="屏幕与控制分享 (Slave)" FontSize="20" FontWeight="Bold" Foreground="#1E1E1E"/>
-                <TextBlock Text="主动向指定 Master 端献出本地屏幕图像及键盘鼠标交互权限" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
+                <TextBlock Text="主动向 Master 献出本地屏幕及键鼠控制权，或开放本地端口等待 Master 接入" FontSize="12" Foreground="#666666" Margin="0,4,0,0"/>
             </StackPanel>
 
-            <!-- 连接目标配置卡片 -->
+            <!-- 网络通信与连接目标配置卡片 -->
             <Border Background="White" CornerRadius="8" Padding="16" Margin="0,0,0,16" BorderBrush="#E0E0E0" BorderThickness="1">
                 <StackPanel>
-                    <TextBlock Text="目标 Master 主机" FontWeight="SemiBold" FontSize="14" Margin="0,0,0,12" Foreground="#333333"/>
+                    <TextBlock Text="网络通信模式" FontWeight="SemiBold" FontSize="14" Margin="0,0,8,8" Foreground="#333333"/>
                     
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="12"/>
-                            <ColumnDefinition Width="90"/>
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0">
-                            <TextBlock Text="IP 地址 / 域名" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>
-                            <TextBox Text="{Binding MasterHost, UpdateSourceTrigger=PropertyChanged}" Height="32" Padding="6,4" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                    <RadioButton IsChecked="{Binding IsConnectMode}" Margin="0,4,0,4" GroupName="TransportModeGroup">
+                        <StackPanel Margin="4,-2,0,0">
+                            <TextBlock Text="反向连向 Master (Connect - 默认穿透)" FontWeight="Medium" Foreground="#222222"/>
+                            <TextBlock Text="主动拨号连向指定的 Master 主机，天然穿透复杂内网与 NAT 防火墙" FontSize="11" Foreground="#888888"/>
                         </StackPanel>
-                        <StackPanel Grid.Column="2">
-                            <TextBlock Text="端口号" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>
-                            <TextBox Text="{Binding MasterPort, UpdateSourceTrigger=PropertyChanged}" Height="32" Padding="6,4" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                    </RadioButton>
+
+                    <RadioButton IsChecked="{Binding IsListenMode}" Margin="0,4,0,12" GroupName="TransportModeGroup">
+                        <StackPanel Margin="4,-2,0,0">
+                            <TextBlock Text="正向受控服务 (Listen - 本地监听)" FontWeight="Medium" Foreground="#222222"/>
+                            <TextBlock Text="开放本地端口等待 Master 连入，允许多个 Master 客户端并发连接与独立控制" FontSize="11" Foreground="#888888"/>
                         </StackPanel>
-                    </Grid>
+                    </RadioButton>
+
+                    <!-- Connect 模式目标配置 -->
+                    <StackPanel Visibility="{Binding IsConnectMode, Converter={StaticResource BoolToVis}}">
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="90"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="目标 Master IP 地址 / 域名" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding MasterHost, UpdateSourceTrigger=PropertyChanged}" Height="32" Padding="6,4" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="端口号" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>
+                                <TextBox Text="{Binding MasterPort, UpdateSourceTrigger=PropertyChanged}" Height="32" Padding="6,4" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Listen 模式监听配置 -->
+                    <StackPanel Visibility="{Binding IsListenMode, Converter={StaticResource BoolToVis}}">
+                        <StackPanel Margin="0,0,0,8">
+                            <TextBlock Text="本地服务端监听端口" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>
+                            <TextBox Text="{Binding ListenPort, UpdateSourceTrigger=PropertyChanged}" Width="120" HorizontalAlignment="Left" Height="32" Padding="6,4" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                        </StackPanel>
+                    </StackPanel>
 
                     <StackPanel Margin="0,4,0,0">
                         <TextBlock Text="本机标识备注 (设备名)" FontSize="12" Foreground="#777777" Margin="0,0,0,4"/>

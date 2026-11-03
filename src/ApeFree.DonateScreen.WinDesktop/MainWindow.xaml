@@ -6,7 +6,7 @@
         xmlns:vm="clr-namespace:ApeFree.DonateScreen.WinDesktop.ViewModels"
         xmlns:slaveViews="clr-namespace:ApeFree.DonateScreen.WinSlaveDesktop.Views;assembly=ApeFree.DonateScreen.WinSlaveDesktop"
         mc:Ignorable="d"
-        Title="ApeFree.DonateScreen - 远程屏幕与控制管理系统" Height="680" Width="820"
+        Title="ApeFree.DonateScreen - 远程屏幕与控制管理系统" Height="680" Width="840"
         WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI, Microsoft YaHei">
     <Window.DataContext>
         <vm:MasterViewModel x:Name="ViewModel" />
@@ -26,40 +26,73 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- 服务端监听控制卡片 -->
-                    <Border Grid.Row="0" Background="White" CornerRadius="8" Padding="16" Margin="0,0,0,16" BorderBrush="#E0E0E0" BorderThickness="1">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
+                    <!-- 双模式控制卡片区域：监听与主动直连 -->
+                    <Grid Grid.Row="0" Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
 
-                            <StackPanel Grid.Column="0">
+                        <!-- 卡片 1：本地监听服务 (反向受控) -->
+                        <Border Grid.Column="0" Background="White" CornerRadius="8" Padding="14" BorderBrush="#E0E0E0" BorderThickness="1">
+                            <StackPanel>
                                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
-                                    <TextBlock Text="本地监听服务" FontWeight="Bold" FontSize="15" Foreground="#222222" VerticalAlignment="Center" Margin="0,0,12,0"/>
-                                    <Border Background="#E5F3FF" CornerRadius="4" Padding="8,2" VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding StatusText}" Foreground="#0078D4" FontSize="12"/>
+                                    <TextBlock Text="本地监听 (反向受控)" FontWeight="Bold" FontSize="14" Foreground="#222222" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <Border Background="#E5F3FF" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding StatusText}" Foreground="#0078D4" FontSize="11" TextTrimming="CharacterEllipsis" MaxWidth="160"/>
                                     </Border>
                                 </StackPanel>
-                                <TextBlock Text="等待远程 Slave 端主动连入，接入的设备将自动出现在下方列表中" FontSize="12" Foreground="#777777"/>
-                            </StackPanel>
+                                <TextBlock Text="开放端口等待远程 Slave 计算机主动连入" FontSize="11" Foreground="#777777" Margin="0,0,0,8"/>
 
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
-                                    <TextBlock Text="监听端口:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,6,0"/>
-                                    <TextBox Text="{Binding ListenPort, UpdateSourceTrigger=PropertyChanged}" Width="70" Height="30" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <TextBlock Text="端口:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,4,0" FontSize="12"/>
+                                        <TextBox Text="{Binding ListenPort, UpdateSourceTrigger=PropertyChanged}" Width="70" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="{Binding ActionButtonText}" Click="OnToggleListenClicked" Width="110" Height="30" Background="#0078D4" Foreground="White" FontWeight="SemiBold" FontSize="12" BorderThickness="0" Cursor="Hand">
+                                        <Button.Resources>
+                                            <Style TargetType="Border"><Setter Property="CornerRadius" Value="6"/></Style>
+                                        </Button.Resources>
+                                    </Button>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 卡片 2：主动直连受控端 (正向直连) -->
+                        <Border Grid.Column="2" Background="White" CornerRadius="8" Padding="14" BorderBrush="#E0E0E0" BorderThickness="1">
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
+                                    <TextBlock Text="主动直连 (正向受控)" FontWeight="Bold" FontSize="14" Foreground="#222222" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <Border Background="#EAF7EC" CornerRadius="4" Padding="6,2" VerticalAlignment="Center">
+                                        <TextBlock Text="正向直连" Foreground="#107C41" FontSize="11"/>
+                                    </Border>
                                 </StackPanel>
+                                <TextBlock Text="主动直连已开放服务端口的 Slave 计算机" FontSize="11" Foreground="#777777" Margin="0,0,0,8"/>
 
-                                <Button Content="{Binding ActionButtonText}" Click="OnToggleListenClicked" Width="140" Height="34" Background="#0078D4" Foreground="White" FontWeight="SemiBold" BorderThickness="0" Cursor="Hand">
-                                    <Button.Resources>
-                                        <Style TargetType="Border">
-                                            <Setter Property="CornerRadius" Value="6"/>
-                                        </Style>
-                                    </Button.Resources>
-                                </Button>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="6"/>
+                                        <ColumnDefinition Width="55"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" Text="{Binding TargetHost, UpdateSourceTrigger=PropertyChanged}" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC" ToolTip="目标受控端 IP 或主机名"/>
+                                    <TextBox Grid.Column="2" Text="{Binding TargetPort, UpdateSourceTrigger=PropertyChanged}" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC" ToolTip="目标受控端端口"/>
+                                    <Button Grid.Column="4" Content="连接目标" Click="OnConnectToSlaveClicked" Width="90" Height="30" Background="#107C41" Foreground="White" FontWeight="SemiBold" FontSize="12" BorderThickness="0" Cursor="Hand">
+                                        <Button.Resources>
+                                            <Style TargetType="Border"><Setter Property="CornerRadius" Value="6"/></Style>
+                                        </Button.Resources>
+                                    </Button>
+                                </Grid>
                             </StackPanel>
-                        </Grid>
-                    </Border>
+                        </Border>
+                    </Grid>
 
                     <!-- Slave 设备接入列表 -->
                     <Grid Grid.Row="1">
@@ -122,7 +155,7 @@
                                 Visibility="{Binding HasNoSlaveDevices, Converter={StaticResource BoolToVisConverter}}">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="32">
                                 <TextBlock Text="暂无 Slave 设备接入" FontSize="16" FontWeight="SemiBold" Foreground="#888888" HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                                <TextBlock Text="请在受控端 (WinSlaveDesktop) 输入本机的 IP 与监听端口，并点击【开始分享】即可在此显示" FontSize="12" Foreground="#AAAAAA" HorizontalAlignment="Center"/>
+                                <TextBlock Text="可以在左侧启动本地监听等待受控端连入，也可以在右侧输入目标受控端 IP:Port 进行主动直连" FontSize="12" Foreground="#AAAAAA" HorizontalAlignment="Center"/>
                             </StackPanel>
                         </Border>
                     </Grid>

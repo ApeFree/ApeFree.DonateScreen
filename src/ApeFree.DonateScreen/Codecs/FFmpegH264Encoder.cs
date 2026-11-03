@@ -60,6 +60,8 @@ namespace ApeFree.DonateScreen.Codecs
 
         private void EnsureEncoder(int width, int height)
         {
+            width &= ~1;
+            height &= ~1;
             if (_encCtx != null && _currentWidth == width && _currentHeight == height)
             {
                 return;
