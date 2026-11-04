@@ -21,6 +21,11 @@ namespace ApeFree.DonateScreen.WinDesktop
             ViewModel.CopyMasterPeerId();
         }
 
+        private async void OnConnectToSlaveClicked(object sender, RoutedEventArgs e)
+        {
+            await ViewModel.ConnectToSlaveAsync();
+        }
+
         private async void OnToggleRelayServerClicked(object sender, RoutedEventArgs e)
         {
             await ViewModel.RelayViewModel.ToggleServerAsync();

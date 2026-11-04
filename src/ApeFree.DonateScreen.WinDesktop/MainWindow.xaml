@@ -26,39 +26,31 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- 服务端监听控制卡片 -->
+                    <!-- 主控端控制卡片区域 -->
                     <Border Grid.Row="0" Background="White" CornerRadius="8" Padding="16" Margin="0,0,0,16" BorderBrush="#E0E0E0" BorderThickness="1">
                         <StackPanel>
-                            <Grid Margin="0,0,0,12">
+                            <Grid Margin="0,0,0,10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
 
                                 <StackPanel Grid.Column="0">
-                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,6">
-                                        <TextBlock Text="主控端服务" FontWeight="Bold" FontSize="15" Foreground="#222222" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,4">
+                                        <TextBlock Text="主控端通信与控制服务" FontWeight="Bold" FontSize="15" Foreground="#222222" VerticalAlignment="Center" Margin="0,0,12,0"/>
                                         <Border Background="#E5F3FF" CornerRadius="4" Padding="8,2" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding StatusText}" Foreground="#0078D4" FontSize="12"/>
                                         </Border>
                                     </StackPanel>
-                                    <TextBlock Text="等待远程 Slave 端主动连入，接入的设备将自动出现在下方列表中" FontSize="12" Foreground="#777777"/>
+                                    <TextBlock Text="支持 P2P 中继穿透、本地监听等待 Slave 连入，或主动直连目标 Slave 节点" FontSize="12" Foreground="#777777"/>
                                 </StackPanel>
-
-                                <Button Grid.Column="1" Content="{Binding ActionButtonText}" Click="OnToggleListenClicked" Width="140" Height="34" Background="#0078D4" Foreground="White" FontWeight="SemiBold" BorderThickness="0" Cursor="Hand">
-                                    <Button.Resources>
-                                        <Style TargetType="Border">
-                                            <Setter Property="CornerRadius" Value="6"/>
-                                        </Style>
-                                    </Button.Resources>
-                                </Button>
                             </Grid>
 
                             <!-- 网络模式切换 -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                <TextBlock Text="网络模式:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,12,0" FontSize="12"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <TextBlock Text="通信模式:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,12,0" FontSize="12"/>
                                 <RadioButton Content="P2P 中继穿透模式 (推荐)" IsChecked="{Binding IsP2PMode}" Margin="0,0,16,0" GroupName="MasterNetMode"/>
-                                <RadioButton Content="标准 TCP 监听模式" IsChecked="{Binding IsTcpMode}" GroupName="MasterNetMode"/>
+                                <RadioButton Content="标准 TCP 直连/局域网模式" IsChecked="{Binding IsTcpMode}" GroupName="MasterNetMode"/>
                             </StackPanel>
 
                             <!-- P2P 模式配置区域 -->
@@ -68,6 +60,8 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="16"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="16"/>
+                                        <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
@@ -86,15 +80,75 @@
                                             <Button Grid.Column="1" Content="复制 PeerId" Click="OnCopyPeerIdClicked" Height="30" Margin="6,0,0,0" Background="#F0F0F0" BorderBrush="#CCCCCC" Cursor="Hand"/>
                                         </Grid>
                                     </StackPanel>
+
+                                    <Button Grid.Column="4" Content="{Binding ActionButtonText}" Click="OnToggleListenClicked" Width="130" Height="32" VerticalAlignment="Bottom" Background="#0078D4" Foreground="White" FontWeight="SemiBold" BorderThickness="0" Cursor="Hand">
+                                        <Button.Resources>
+                                            <Style TargetType="Border">
+                                                <Setter Property="CornerRadius" Value="6"/>
+                                            </Style>
+                                        </Button.Resources>
+                                    </Button>
                                 </Grid>
                             </StackPanel>
 
-                            <!-- TCP 模式配置区域 -->
+                            <!-- TCP 模式配置区域 (双卡片：本地监听 + 主动直连) -->
                             <StackPanel Visibility="{Binding IsTcpMode, Converter={StaticResource BoolToVisConverter}}">
-                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,4,0,4">
-                                    <TextBlock Text="TCP 监听端口:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,8,0" FontSize="12"/>
-                                    <TextBox Text="{Binding ListenPort, UpdateSourceTrigger=PropertyChanged}" Width="80" Height="30" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
-                                </StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="14"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- 卡片 1：本地监听服务 (反向受控) -->
+                                    <Border Grid.Column="0" Background="#FAFAFA" CornerRadius="6" Padding="12" BorderBrush="#E0E0E0" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock Text="本地监听 (等待 Slave 连入)" FontWeight="Bold" FontSize="13" Foreground="#222222" Margin="0,0,0,4"/>
+                                            <TextBlock Text="开放端口等待远程 Slave 计算机主动连入" FontSize="11" Foreground="#777777" Margin="0,0,0,8"/>
+
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <TextBlock Text="端口:" VerticalAlignment="Center" Foreground="#555555" Margin="0,0,4,0" FontSize="12"/>
+                                                    <TextBox Text="{Binding ListenPort, UpdateSourceTrigger=PropertyChanged}" Width="70" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC"/>
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Content="{Binding ActionButtonText}" Click="OnToggleListenClicked" Width="110" Height="30" Background="#0078D4" Foreground="White" FontWeight="SemiBold" FontSize="12" BorderThickness="0" Cursor="Hand">
+                                                    <Button.Resources>
+                                                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="6"/></Style>
+                                                    </Button.Resources>
+                                                </Button>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 卡片 2：主动直连受控端 (正向直连) -->
+                                    <Border Grid.Column="2" Background="#FAFAFA" CornerRadius="6" Padding="12" BorderBrush="#E0E0E0" BorderThickness="1">
+                                        <StackPanel>
+                                            <TextBlock Text="主动直连受控端 (正向连接)" FontWeight="Bold" FontSize="13" Foreground="#222222" Margin="0,0,0,4"/>
+                                            <TextBlock Text="主动直连已开放服务端口的 Slave 计算机" FontSize="11" Foreground="#777777" Margin="0,0,0,8"/>
+
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="6"/>
+                                                    <ColumnDefinition Width="55"/>
+                                                    <ColumnDefinition Width="8"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox Grid.Column="0" Text="{Binding TargetHost, UpdateSourceTrigger=PropertyChanged}" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC" ToolTip="目标受控端 IP 或主机名"/>
+                                                <TextBox Grid.Column="2" Text="{Binding TargetPort, UpdateSourceTrigger=PropertyChanged}" Height="28" VerticalContentAlignment="Center" BorderBrush="#CCCCCC" ToolTip="目标受控端端口"/>
+                                                <Button Grid.Column="4" Content="连接目标" Click="OnConnectToSlaveClicked" Width="90" Height="30" Background="#107C41" Foreground="White" FontWeight="SemiBold" FontSize="12" BorderThickness="0" Cursor="Hand">
+                                                    <Button.Resources>
+                                                        <Style TargetType="Border"><Setter Property="CornerRadius" Value="6"/></Style>
+                                                    </Button.Resources>
+                                                </Button>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
                             </StackPanel>
                         </StackPanel>
                     </Border>
@@ -160,7 +214,7 @@
                                 Visibility="{Binding HasNoSlaveDevices, Converter={StaticResource BoolToVisConverter}}">
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="32">
                                 <TextBlock Text="暂无 Slave 设备接入" FontSize="16" FontWeight="SemiBold" Foreground="#888888" HorizontalAlignment="Center" Margin="0,0,0,8"/>
-                                <TextBlock Text="请在受控端 (WinSlaveDesktop) 输入本机的 PeerId 或 IP 端口，并点击【开始分享】即可在此显示" FontSize="12" Foreground="#AAAAAA" HorizontalAlignment="Center"/>
+                                <TextBlock Text="支持 P2P 接入、在左侧启动本地监听等待受控端连入，或在右侧输入目标受控端 IP:Port 主动直连" FontSize="12" Foreground="#AAAAAA" HorizontalAlignment="Center"/>
                             </StackPanel>
                         </Border>
                     </Grid>

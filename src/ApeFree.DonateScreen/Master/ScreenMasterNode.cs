@@ -7,6 +7,7 @@ using STTech.BytesIO.Core;
 using STTech.BytesIO.P2P;
 using STTech.BytesIO.Tcp;
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,15 +15,18 @@ using System.Threading.Tasks;
 namespace ApeFree.DonateScreen.Master
 {
     /// <summary>
-    /// Master 主控端服务监听节点。
-    /// 负责开启 TCP 监听或 P2P (Libp2p) 去中心化中继，管理连入的 Slave 客户端并提供动态服务代理。
+    /// Master 主控端服务监听与控制节点。
+    /// 负责开启 TCP 监听或 P2P 中继等待受控端连入（反向模式），或主动向指定的受控端发起 TCP 连接（正向模式），
+    /// 管理连入的 Slave 客户端并提供动态服务代理。
     /// </summary>
     public class ScreenMasterNode : IDisposable
     {
         private readonly ScreenMasterOptions _options;
         private readonly object _lock = new();
+        private readonly ConcurrentDictionary<string, TcpClient> _outboundClients = new();
         private RpcTerminal? _terminal;
         private TcpServer? _tcpServer;
+        private TcpClient? _tcpClient;
         private BootstrapServer? _bootstrapServer;
         private PeerClient? _p2pClient;
         private BytesRpcTerminalAddon? _addon;
@@ -33,14 +37,15 @@ namespace ApeFree.DonateScreen.Master
         private bool _isDisposed;
 
         /// <summary>
-        /// Slave 多设备会话管理器
+        /// Slave 会话管理器
         /// </summary>
         public SlaveSessionManager SessionManager => _sessionManager;
 
         /// <summary>
-        /// 是否正在运行监听或已建立连接
+        /// 是否正在运行（Listen 模式下为监听状态，Connect 模式下为客户端连接状态）
         /// </summary>
         public bool IsRunning => (_tcpServer != null && _tcpServer.IsListening) ||
+                                 (_tcpClient != null && _tcpClient.IsConnected) ||
                                  (_bootstrapServer != null && _bootstrapServer.IsListening) ||
                                  (_p2pClient != null && _p2pClient.IsConnected);
 
@@ -62,7 +67,7 @@ namespace ApeFree.DonateScreen.Master
         }
 
         /// <summary>
-        /// 启动服务监听或发起 P2P 连接
+        /// 启动 Master 节点（按配置选择开放本地监听、主动直连目标 Slave 或启动 P2P 去中心化连接）
         /// </summary>
         public async Task<bool> StartAsync()
         {
@@ -78,118 +83,104 @@ namespace ApeFree.DonateScreen.Master
                 _masterService = new MasterScreenService();
                 _masterService.SlaveRegistered += OnSlaveReportedRegistration;
                 _terminal.RegisterService(_masterService);
-
-                if (_options.UseP2P)
-                {
-                    // 3a. P2P 模式
-                    if (!string.IsNullOrWhiteSpace(_options.P2PServerAddress))
-                    {
-                        // 连入公共 P2P Relay 服务端
-                        var peerClient = new PeerClient();
-                        peerClient.RemoteAddress = P2PAddressHelper.ResolveServerMultiaddr(_options.P2PServerAddress, _options.ServerPeerId, _options.ServerSeed);
-                        peerClient.Options.EnableRelay = _options.EnableRelay;
-                        peerClient.Options.EnableDht = _options.EnableDht;
-                        peerClient.Options.EnableMdns = _options.EnableMdns;
-                        peerClient.Options.EnableQuic = _options.EnableQuic;
-
-                        if (!string.IsNullOrWhiteSpace(_options.IdentitySeed))
-                        {
-                            peerClient.Options.IdentitySeed = P2PAddressHelper.ParseSeed(_options.IdentitySeed);
-                        }
-
-                        _p2pClient = peerClient;
-                        _addon.BindClient(peerClient);
-
-                        // 开启无限自动重连
-                        peerClient.UseAutoReconnect(3000, 0);
-
-                        peerClient.OnConnectedSuccessfully += (s, e) =>
-                        {
-                            _initialConnectCts?.Cancel();
-
-                            // 发送 Master 角色注册握手包给 Relay Server
-                            var handshake = P2PRelayManager.CreateHandshakePacket("Master", peerClient.LocalPeerId, null);
-                            peerClient.Send(handshake);
-
-                            StartP2PSlaveWatcher(peerClient);
-                        };
-
-                        peerClient.OnDisconnected += (s, e) =>
-                        {
-                            _p2pWatcherCts?.Cancel();
-                            HandleClientDisconnected(peerClient);
-                        };
-                    }
-                    else
-                    {
-                        // 本地开启 P2P 监听服务 (BootstrapServer)
-                        _bootstrapServer = new BootstrapServer();
-                        _bootstrapServer.Options.ListenAddress = _options.ListenHost;
-                        _bootstrapServer.Options.TcpPort = _options.P2PPort > 0 ? _options.P2PPort : P2PAddressHelper.DefaultP2PPort;
-                        _bootstrapServer.Options.EnableRelay = _options.EnableRelay;
-                        _bootstrapServer.Options.EnableDht = _options.EnableDht;
-                        _bootstrapServer.Options.EnableMdns = _options.EnableMdns;
-                        _bootstrapServer.Options.EnableQuic = _options.EnableQuic;
-
-                        if (!string.IsNullOrWhiteSpace(_options.IdentitySeed))
-                        {
-                            _bootstrapServer.Options.IdentitySeed = P2PAddressHelper.ParseSeed(_options.IdentitySeed);
-                        }
-
-                        _bootstrapServer.PeerConnected += (s, e) =>
-                        {
-                            _addon.BindClient(e.Client);
-                            HandleClientConnected(e.Client);
-                        };
-
-                        _bootstrapServer.PeerDisconnected += (s, e) =>
-                        {
-                            _addon.UnbindClient(e.Client);
-                            HandleClientDisconnected(e.Client);
-                        };
-                    }
-                }
-                else
-                {
-                    // 3b. 标准 TCP 监听模式
-                    _tcpServer = new TcpServer
-                    {
-                        Host = _options.ListenHost,
-                        Port = _options.ListenPort
-                    };
-
-                    _addon.BindServer(_tcpServer);
-
-                    _tcpServer.ClientConnected += (s, e) => HandleClientConnected(e.Client);
-                    _tcpServer.ClientDisconnected += (s, e) => HandleClientDisconnected(e.Client);
-                }
             }
 
             if (_options.UseP2P)
             {
-                if (_p2pClient != null)
-                {
-                    var result = await _p2pClient.ConnectAsync(new ConnectArgument { Timeout = 10000 }).ConfigureAwait(false);
-                    if (!result.IsSuccess)
-                    {
-                        StartInitialConnectLoop(_p2pClient);
-                    }
-                    else
-                    {
-                        StartP2PSlaveWatcher(_p2pClient);
-                    }
-                    return true;
-                }
-                else if (_bootstrapServer != null)
-                {
-                    await _bootstrapServer.StartAsync().ConfigureAwait(false);
-                    return true;
-                }
-                return false;
+                return await StartP2PAsync().ConfigureAwait(false);
+            }
+            else if (_options.TransportMode == NetworkTransportMode.Connect)
+            {
+                return await StartConnectAsync().ConfigureAwait(false);
             }
             else
             {
-                await _tcpServer!.StartAsync().ConfigureAwait(false);
+                return await StartListeningAsync().ConfigureAwait(false);
+            }
+        }
+
+        #region P2P 模式
+
+        private async Task<bool> StartP2PAsync()
+        {
+            if (!string.IsNullOrWhiteSpace(_options.P2PServerAddress))
+            {
+                // 连入公共 P2P Relay 服务端
+                var peerClient = new PeerClient();
+                peerClient.RemoteAddress = P2PAddressHelper.ResolveServerMultiaddr(_options.P2PServerAddress, _options.ServerPeerId, _options.ServerSeed);
+                peerClient.Options.EnableRelay = _options.EnableRelay;
+                peerClient.Options.EnableDht = _options.EnableDht;
+                peerClient.Options.EnableMdns = _options.EnableMdns;
+                peerClient.Options.EnableQuic = _options.EnableQuic;
+
+                if (!string.IsNullOrWhiteSpace(_options.IdentitySeed))
+                {
+                    peerClient.Options.IdentitySeed = P2PAddressHelper.ParseSeed(_options.IdentitySeed);
+                }
+
+                _p2pClient = peerClient;
+                _addon!.BindClient(peerClient);
+
+                // 开启无限自动重连
+                peerClient.UseAutoReconnect(3000, 0);
+
+                peerClient.OnConnectedSuccessfully += (s, e) =>
+                {
+                    _initialConnectCts?.Cancel();
+
+                    // 发送 Master 角色注册握手包给 Relay Server
+                    var handshake = P2PRelayManager.CreateHandshakePacket("Master", peerClient.LocalPeerId, null);
+                    peerClient.Send(handshake);
+
+                    StartP2PSlaveWatcher(peerClient);
+                };
+
+                peerClient.OnDisconnected += (s, e) =>
+                {
+                    _p2pWatcherCts?.Cancel();
+                    HandleClientDisconnected(peerClient);
+                };
+
+                var result = await _p2pClient.ConnectAsync(new ConnectArgument { Timeout = 10000 }).ConfigureAwait(false);
+                if (!result.IsSuccess)
+                {
+                    StartInitialConnectLoop(_p2pClient);
+                }
+                else
+                {
+                    StartP2PSlaveWatcher(_p2pClient);
+                }
+                return true;
+            }
+            else
+            {
+                // 本地开启 P2P 监听服务 (BootstrapServer)
+                _bootstrapServer = new BootstrapServer();
+                _bootstrapServer.Options.ListenAddress = _options.ListenHost;
+                _bootstrapServer.Options.TcpPort = _options.P2PPort > 0 ? _options.P2PPort : P2PAddressHelper.DefaultP2PPort;
+                _bootstrapServer.Options.EnableRelay = _options.EnableRelay;
+                _bootstrapServer.Options.EnableDht = _options.EnableDht;
+                _bootstrapServer.Options.EnableMdns = _options.EnableMdns;
+                _bootstrapServer.Options.EnableQuic = _options.EnableQuic;
+
+                if (!string.IsNullOrWhiteSpace(_options.IdentitySeed))
+                {
+                    _bootstrapServer.Options.IdentitySeed = P2PAddressHelper.ParseSeed(_options.IdentitySeed);
+                }
+
+                _bootstrapServer.PeerConnected += (s, e) =>
+                {
+                    _addon!.BindClient(e.Client);
+                    HandleClientConnected(e.Client);
+                };
+
+                _bootstrapServer.PeerDisconnected += (s, e) =>
+                {
+                    _addon!.UnbindClient(e.Client);
+                    HandleClientDisconnected(e.Client);
+                };
+
+                await _bootstrapServer.StartAsync().ConfigureAwait(false);
                 return true;
             }
         }
@@ -256,6 +247,111 @@ namespace ApeFree.DonateScreen.Master
                 }
             }, token);
         }
+
+        #endregion
+
+        #region 服务端监听 (Listen 模式)
+
+        private async Task<bool> StartListeningAsync()
+        {
+            lock (_lock)
+            {
+                _tcpServer = new TcpServer
+                {
+                    Host = _options.ListenHost,
+                    Port = _options.ListenPort
+                };
+
+                _addon!.BindServer(_tcpServer);
+
+                _tcpServer.ClientConnected += (s, e) => HandleClientConnected(e.Client);
+                _tcpServer.ClientDisconnected += (s, e) => HandleClientDisconnected(e.Client);
+            }
+
+            await _tcpServer!.StartAsync().ConfigureAwait(false);
+            return true;
+        }
+
+        #endregion
+
+        #region 主动直连 (Connect 模式)
+
+        private async Task<bool> StartConnectAsync()
+        {
+            _tcpClient = new TcpClient
+            {
+                Host = _options.TargetHost,
+                Port = _options.TargetPort
+            };
+
+            _addon!.BindClient(_tcpClient);
+
+            if (_options.AutoReconnect)
+            {
+                _tcpClient.UseAutoReconnect(_options.ReconnectIntervalMs, 0);
+            }
+
+            _tcpClient.OnConnectedSuccessfully += (s, e) => HandleClientConnected(_tcpClient);
+            _tcpClient.OnDisconnected += (s, e) => HandleClientDisconnected(_tcpClient);
+
+            var connResult = await _tcpClient.ConnectAsync();
+            return connResult.IsSuccess;
+        }
+
+        /// <summary>
+        /// 主动向指定的目标 Slave 节点发起直连，并加入管理列表
+        /// </summary>
+        public async Task<SlaveSession?> ConnectToSlaveAsync(string host, int port)
+        {
+            if (_terminal == null || _addon == null)
+            {
+                lock (_lock)
+                {
+                    if (_terminal == null || _addon == null)
+                    {
+                        _terminal = new RpcTerminal(new TerminalInfo { Name = _options.NodeName });
+                        _addon = new BytesRpcTerminalAddon(_terminal);
+
+                        if (_masterService == null)
+                        {
+                            _masterService = new MasterScreenService();
+                            _masterService.SlaveRegistered += OnSlaveReportedRegistration;
+                            _terminal.RegisterService(_masterService);
+                        }
+                    }
+                }
+            }
+
+            var client = new TcpClient
+            {
+                Host = host,
+                Port = port
+            };
+
+            _addon!.BindClient(client);
+
+            if (_options.AutoReconnect)
+            {
+                client.UseAutoReconnect(_options.ReconnectIntervalMs, 0);
+            }
+
+            string clientKey = $"{host}:{port}";
+            _outboundClients[clientKey] = client;
+
+            client.OnConnectedSuccessfully += (s, e) => HandleClientConnected(client);
+            client.OnDisconnected += (s, e) => HandleClientDisconnected(client);
+
+            var result = await client.ConnectAsync();
+            if (result.IsSuccess)
+            {
+                string sessionId = client.GetHashCode().ToString();
+                return _sessionManager.GetSession(sessionId);
+            }
+
+            return null;
+        }
+
+        #endregion
 
         private void HandleClientConnected(BytesClient client)
         {
@@ -393,11 +489,12 @@ namespace ApeFree.DonateScreen.Master
         }
 
         /// <summary>
-        /// 异步停止服务监听并释放连接
+        /// 异步停止服务监听与所有连接并释放资源
         /// </summary>
         public async Task StopAsync()
         {
             TcpServer? serverToClose = null;
+            TcpClient? clientToClose = null;
             BootstrapServer? bootstrapToClose = null;
             PeerClient? peerToClose = null;
 
@@ -415,6 +512,12 @@ namespace ApeFree.DonateScreen.Master
                     _tcpServer = null;
                 }
 
+                if (_tcpClient != null)
+                {
+                    clientToClose = _tcpClient;
+                    _tcpClient = null;
+                }
+
                 if (_bootstrapServer != null)
                 {
                     bootstrapToClose = _bootstrapServer;
@@ -426,6 +529,17 @@ namespace ApeFree.DonateScreen.Master
                     peerToClose = _p2pClient;
                     _p2pClient = null;
                 }
+
+                foreach (var kvp in _outboundClients)
+                {
+                    try
+                    {
+                        kvp.Value.Disconnect();
+                        kvp.Value.Dispose();
+                    }
+                    catch { }
+                }
+                _outboundClients.Clear();
 
                 if (_masterService != null)
                 {
@@ -457,6 +571,16 @@ namespace ApeFree.DonateScreen.Master
                 {
                     try { serverToClose.Dispose(); } catch { }
                 }
+            }
+
+            if (clientToClose != null)
+            {
+                try
+                {
+                    clientToClose.Disconnect();
+                    clientToClose.Dispose();
+                }
+                catch { }
             }
 
             if (bootstrapToClose != null)
